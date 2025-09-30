@@ -21,6 +21,7 @@ env = swift.Swift()
 env.launch(realtime=True) 
 env.set_camera_pose([3, 3, 2], [0, 0, 0]) 
 #####
+
 class Gen3Lite(DHRobot3D):
     def __init__(self):
         """
@@ -29,27 +30,27 @@ class Gen3Lite(DHRobot3D):
         # DH links
         links = self._create_DH()
 
-        # STL link names (make sure STL files are in same folder)
+        # STL link names
         link3D_names = dict(
-            link0 = 'base copy',
-            link1 = 'shoulder copy',
-            link2 = 'arm copy',
-            link3 = 'forearm copy',
-            link4 = 'lowerwrist copy',
-            link5 = 'upperwrist copy',
-            link6 = 'upperwrist copy'   # ⚠️ 改掉，不要再用 lower_wrist_link
+            link0='base_link',
+            link1='shoulder_link',
+            link2='arm7',
+            link3='fm3',
+            link4='lower_wrist',
+            link5='upper_wrist',
+            link6='base_link'   # ⚠️ 這個會被透明小球覆蓋
         )
 
         # 測試姿態 (qtest)
         qtest = [0, 0, 0, 0, 0, 0]
         qtest_transforms = [
-            spb.transl(0, 0, 0),                          # base
-            spb.transl(0, 0, 0),                        # shoulder
-            spb.transl(-0.1, 0, -0.01),  # arm
-            spb.transl(0, 0, 0),           # forearm
-            spb.transl(0, 0, 0),    # lower wrist
-            spb.transl(0, 0, 0),  # upper wrist
-            spb.transl(-0.105, 0, 0.0285) @ spb.troty(-pi/2)  # end-effector
+            spb.transl(0, 0, -0.112),      # base
+            spb.transl(0, 0, 0.013),       # shoulder
+            spb.transl(0, -0.02, 0.128),   # arm
+            spb.transl(0, -0.0205, 0.408), # forearm
+            spb.transl(0.138, 0, 0.408),   # lower wrist
+            spb.transl(0.2428, 0, 0.38),   # upper wrist
+            spb.transl(0.39, 0, 0.35)@ spb.rpy2tr(0,pi/2,0, order='xyz')       # end-effector
         ]
 
         current_path = os.path.abspath(os.path.dirname(__file__))
@@ -57,46 +58,60 @@ class Gen3Lite(DHRobot3D):
                          link3d_dir=current_path,
                          qtest=qtest, qtest_transforms=qtest_transforms)
 
+        # ✅ 設定顏色 (RGBA)
+        colors = [
+            (0.45, 0.42, 0.40, 1),   # base
+            (0.55, 0.55, 0.55, 1),   # shoulder
+            (0.45, 0.42, 0.40, 1),   # arm
+            (0.45, 0.42, 0.40, 1),   # forearm
+            (0.45, 0.42, 0.40, 0.8), # lower wrist
+            (0.55, 0.55, 0.55, 0.9), # upper wrist
+            (0.55, 0.55, 0.55, 1)    # dummy end effector
+        ]
+        for i, mesh in enumerate(self.links_3d):
+            mesh.color = tuple(float(c) for c in colors[i])
+
+        # ✅ 把末端換成咖啡色透明小球
+        #dummy_ee = Sphere(radius=0.02, color=(0.45, 0.30, 0.20, 0.5))
+        #self.links_3d[-1] = dummy_ee
+        dummy_ee = Cylinder(
+        radius=0.03,              # 半徑 2cm
+        length=0.02,              # 高度 5cm
+        color=(0.45, 0.30, 0.20, 0.5),  # 咖啡色 + 透明度 0.5
+        
+)
+        self.links_3d[-1] = dummy_ee
+
         self.q = qtest
 
     # -----------------------------------------------------------------------------------#
     def _create_DH(self):
         """
-        Create DH model for Gen3 Lite (from URDF)
+        Create DH model for Gen3 Lite (from URDF approx)
         """
-        # URDF 對應的 DH 近似
-        a     = [0, 0, 0.28, 0, 0.0285, -0.105]
-        d     = [0.12825, 0.115, 0, 0.02, 0.105, 0.0285]
-        alpha = [pi/2, pi, pi/2, pi/2, -pi/2, -pi/2]
-        offset= [0, 0, 0, 0, 0, 0]
-        qlim  = [[-2.7, 2.7],
-                 [-2.7, 2.7],
-                 [-2.7, 2.7],
-                 [-2.6, 2.6],
-                 [-2.6, 2.6],
-                 [-2.6, 2.6]]
+        a = [0, 0.28, 0, 0, 0, 0]
+        d = [0.128, 0, 0, 0.2428, -0.055, 0.15]   # ✅ 最後一節沿 z 偏移 0.0285
+        alpha = [pi/2, 0, pi/2, pi/2, -pi/2, 0]  # ✅ end-effector α = 0
+        offset = [0, pi/2, 0, pi/2, 0, 0]
+
+        qlim = [
+            [-2.7, 2.7],
+            [-2.7, 2.7],
+            [-2.7, 2.7],
+            [-2.6, 2.6],
+            [-2.6, 2.6],
+            [-2.6, 2.6]
+        ]
 
         links = []
         for i in range(6):
-            link = rtb.RevoluteDH(d=d[i], a=a[i], alpha=alpha[i],
-                                  offset=offset[i], qlim=qlim[i])
+            link = rtb.RevoluteDH(d=float(d[i]), a=float(a[i]),
+                                  alpha=float(alpha[i]),
+                                  offset=float(offset[i]),
+                                  qlim=[float(qlim[i][0]), float(qlim[i][1])])
             links.append(link)
         return links
 
-    # -----------------------------------------------------------------------------------#
-    def test(self):
-        env = swift.Swift()
-        env.launch(realtime=True)
-        self.add_to_env(env)
-
-        q_goal = [pi/4, -pi/6, pi/6, 0, pi/8, -pi/4]
-        qtraj = rtb.jtraj(self.q, q_goal, 50).q
-        for q in qtraj:
-            self.q = q
-            env.step(0.02)
-        env.hold()
-        time.sleep(3)
-#####
 
 #讓底座嘗試前進一步並檢查有沒有撞牆
 def base_step_with_walls(base_geom, step_size=0.05):
@@ -271,7 +286,7 @@ def safe_rrt_path(q1, q2, max_iters=300):
 # 機器人 / 夾爪
 # --------------------------------------------------
 def robot_stick_base():
-    robot.base = base_geom.T * SE3(0, 0, 0.05)
+    robot.base = base_geom.T * SE3(0, 0, 0.12)
 
 def gripper_stick_arm():
     arm_T = robot.fkine(robot.q) * SE3(0.03, 0, 0)
@@ -359,9 +374,9 @@ l11 = DHLink(d=0, a=0.045, alpha=0, qlim=[-pi, pi])
 l22 = DHLink(d=0, a=0.045, alpha=0, qlim=[-pi, pi]) 
 gripper2 = DHRobot([l11, l22], name="gripper2") 
 
-g1 = CylindricalDHRobotPlot(gripper1, cylinder_radius=0.01, color="#36454F") 
+g1 = CylindricalDHRobotPlot(gripper1, cylinder_radius=0.01, color="#7D7060") 
 gripper_1 = g1.create_cylinders() 
-g2 = CylindricalDHRobotPlot(gripper2, cylinder_radius=0.01, color="#36454F") 
+g2 = CylindricalDHRobotPlot(gripper2, cylinder_radius=0.01, color="#5C5247") 
 gripper_2 = g2.create_cylinders() 
 env.add(gripper_1) ;env.add(gripper_2) 
 
@@ -376,8 +391,9 @@ traj3 = rtb.jtraj(q1_open, q1_close, 50).q
 traj4 = rtb.jtraj(q2_open, q2_close, 50).q 
 
 # 機器人與基座 
-base_geom = Cylinder(radius=0.25, length=0.3, color=[0.3, 0.3, 0.3, 1]) 
-base_geom.T = SE3(5, 5, 0.05) 
+#base_geom = Cylinder(radius=0.2, length=0.25, color=[0.3, 0.3, 0.3, 1]) 
+base_geom=Sphere(radius=0.2, color= (0.45, 0.42, 0.40, 1))
+base_geom.T = SE3(5, 5, -0.01) 
 env.add(base_geom) 
 
 area = Cuboid(scale=[0.6, 0.6, 0.01], color=[1, 0.6, 0, 1]) 
@@ -503,7 +519,7 @@ while True:
                     ball_pos_world = ball.T[:3, 3] 
                     base_pos = base_geom.T[:3, 3] 
                     dist = np.linalg.norm(ball_pos_world[:2] - base_pos[:2]) 
-                    if dist < 0.8: 
+                    if dist < 0.5: 
                         patrol = False 
                         pick_and_place = True 
                         target_pos_world = ball_pos_world 
