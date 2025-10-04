@@ -35,17 +35,18 @@ class IRB1200(DHRobot3D):
         
         # A joint config and the 3D object transforms to match that config
         qtest = [0,0,0,0,0,0]
-        qtest_transforms = [spb.transl(0,0,0),
-                            spb.transl(0,0.146,0) ,
-                            spb.transl(0,0.146,-0.13),
-                            spb.transl(0,0.39,-0.0378) ,
-                            spb.transl(0,0.603,-0.0378) ,
-                            spb.transl(0,0.603,-0.1225),
-                            spb.transl(0.08535,0.603,-0.1225) ]
+        qtest_transforms = [spb.transl(0.00 , 0 , 0.00 ) ,                                               #base
+                            spb.transl(0.00 , 0 , 0.20 ) ,                                               #link1
+                            spb.transl(0.00 , 0 , 0.40 ) @ spb.troty(-np.pi/2) @ spb.trotx(np.pi/2) ,    #link2
+                            spb.transl(0.00 , 0 , 0.75 ) @ spb.trotx(np.pi/2) ,                          #link3
+                            spb.transl(0.17 , 0 , 0.79 ) @ spb.troty(np.pi/2) ,                          #link4
+                            spb.transl(0.35 , 0 , 0.79 ) @ spb.trotx(np.pi/2) ,                          #link5
+                            spb.transl(0.44, 0 , 0.792 ) @ spb.troty(np.pi/2)                            #link6
+                            ]                         
 
 
         super().__init__(links, link3D_names, name = 'IRB1200', link3d_dir = current_dir, qtest = qtest, qtest_transforms = qtest_transforms)
-        self.base = self.base * SE3.Rx(np.pi/2) * SE3.Ry(np.pi/2)
+        self.base = self.base 
 
         self.base_mesh = Mesh(filename=self.base_stl_path,color=[0.5, 0.5, 0.5, 1.0],scale=[0.001]*3)
 
@@ -69,6 +70,8 @@ class IRB1200(DHRobot3D):
             [-2.6, 2.6]
         ]
 
+
+    
          
         for i in range(6):
             link = rtb.RevoluteDH(d=d[i], a=a[i], alpha=alpha[i], offset=offset[i], qlim=qlim[i])
@@ -99,15 +102,15 @@ class IRB1200(DHRobot3D):
         time.sleep(3)
 
 
-
-#------------------------------ GUI ------------------------------
+"""
 env = swift.Swift()
 env.launch(realtime=True)
+env.set_camera_pose([3, 3, 2], [0, 0, 0])
+
 robot = IRB1200()
 robot.add_to_env(env)
 
-robot.base = SE3(2, 2, 0.05)
-
+# ------------------------------ GUI ------------------------------
 def slider_callback(value_deg, joint_index):
     q = robot.q.copy()
     q[joint_index] = float(np.deg2rad(float(value_deg)))
@@ -122,16 +125,13 @@ for i in range(robot.n):
             value=float(np.rad2deg(float(robot.q[i]))),
             desc=f'Joint {i+1}', unit='°'
         )
-    )   
+    )
 
-
-# ---------------------------------------------------------------------------------------#
-#if __name__ == "__main__":
-#    robot = IRB1200()
-#    robot.test()
-
+# ------------------------------ Main loop ------------------------------
+while True:
+    env.step(0.03)
+    time.sleep(0.03)
     
-    
+"""
     
 
-    
