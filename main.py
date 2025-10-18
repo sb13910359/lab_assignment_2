@@ -926,6 +926,7 @@ state = {
     "pick_and_place": False,
     "target_pos_world": None,
     "target_ball": None,
+    "e_stop": False
 }
 
 # 狀態 state
@@ -1134,6 +1135,7 @@ while True:
 
     # --- ROBOT 1 MAIN LOOP ---
     robot1_main_cycle()
+
 
 
 
