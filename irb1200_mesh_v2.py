@@ -106,7 +106,7 @@ class IRB1200(DHRobot3D):
 
 #IRB1200 End effector
 class IRB1200EE:            
-    def __init__(self, cyl_radius=0.04, cyl_length=0.15,
+    def __init__(self, cyl_radius=0.08, cyl_length=0.15,
                  plate_size=0.18, plate_thickness=0.04,
                  color_cyl=[0.96, 0.70, 0.82, 1],
                  color_plate=[0.3, 0.3, 0.3, 1]):
@@ -144,4 +144,5 @@ class IRB1200EE:
 
 
     
+
 
