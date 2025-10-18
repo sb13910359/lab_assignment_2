@@ -676,10 +676,6 @@ def swap_to_crushed_object():
 
 # robot3
 def crusher_rmrc_trajectory():
-    """
-    Improved RMRC version for IRB1200 crusher.
-    Combines Lab9 & UR3 damping + smooth orientation control.
-    """
 
     if get_mode() != "auto" or not is_robot_active(3):   # (for robot3)
         print("🔴 IRB1200 crusher paused (manual mode or inactive).")
@@ -717,7 +713,7 @@ def crusher_rmrc_trajectory():
         T_start, q0=np.array([0, np.pi/4, 0, 0, np.pi/4, 0])
     ).q
 
-    print("🦾 Starting improved crusher RMRC sequence...")
+    print("🦾 Starting crusher RMRC sequence...")
 
     # --- RMRC Loop (downward motion) ---
     for i in range(steps - 1):
@@ -1138,5 +1134,6 @@ while True:
 
     # --- ROBOT 1 MAIN LOOP ---
     robot1_main_cycle()
+
 
 
