@@ -6,18 +6,13 @@ import swift
 
 
 class Human:
-    """
-    Represents a human composed of multiple STL body parts that move together.
-    Includes movement controls and button interface for manual motion.
-    """
-
     def __init__(self, env, current_dir, start_pose=SE3(8.7, 5.7, 0), scale=(0.4, 0.4, 0.4)):
         self.env = env
         self.start_pose = start_pose
         self.scale = scale
         self.current_dir = current_dir
 
-        # --- Load STL meshes ---
+        #load STL meshes
         self.human = geometry.Mesh(
             os.path.join(current_dir, "human.stl"),
             pose=start_pose, color=[0.95, 0.80, 0.63, 1], scale=scale)
@@ -31,13 +26,13 @@ class Human:
             os.path.join(current_dir, "human_shirt.stl"),
             pose=start_pose, color=[0.76, 0.60, 0.42, 1], scale=scale)
 
-        # --- Add all parts to environment ---
+        # add to env
         env.add(self.human)
         env.add(self.human1)
         env.add(self.human2)
         env.add(self.human3)
 
-        # --- Create control buttons ---
+        # GUI buttons
         self.btn_forward = swift.Button(desc="↑ Forward", cb=lambda _: self.move(0, -0.1, 0))
         self.btn_turnL = swift.Button(desc="⟲ Turn Left", cb=lambda _: self.move(0, 0, np.pi/8))
         self.btn_turnR = swift.Button(desc="⟳ Turn Right", cb=lambda _: self.move(0, 0, -np.pi/8))
@@ -46,9 +41,6 @@ class Human:
         env.add(self.btn_turnL)
         env.add(self.btn_turnR)
 
-    # ------------------------------------------------------------
-    # 🔧 Core motion updates
-    # ------------------------------------------------------------
     def sync_body(self):
         """Synchronize all body parts to the main mesh position."""
         T = self.human.T
@@ -63,8 +55,8 @@ class Human:
         self.human.T = T
         self.sync_body()
         try:
-            # Force environment step even if other threads halted
             self.env.step(0.02)
         except Exception:
             pass
+
 
