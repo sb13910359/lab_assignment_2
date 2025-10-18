@@ -29,7 +29,7 @@ class Human:
             pose=start_pose, color=[0.44, 0.31, 0.22, 1], scale=scale)
         self.human3 = geometry.Mesh(
             os.path.join(current_dir, "human_shirt.stl"),
-            pose=start_pose, color=[1.0, 0.95, 0.0, 1], scale=scale)
+            pose=start_pose, color=[0.76, 0.60, 0.42, 1], scale=scale)
 
         # --- Add all parts to environment ---
         env.add(self.human)
@@ -67,3 +67,4 @@ class Human:
             self.env.step(0.02)
         except Exception:
             pass
+
