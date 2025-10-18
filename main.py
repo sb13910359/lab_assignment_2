@@ -1,0 +1,1103 @@
+'''
+------------------------- IMPORT -------------------------
+'''
+import os
+import time
+import random
+import threading
+import numpy as np
+import roboticstoolbox as rtb
+from roboticstoolbox import trapezoidal
+from spatialmath import SE3, SO3
+from spatialmath.base import rpy2r, tr2rpy
+from spatialgeometry import Cylinder, Sphere, Mesh
+from ir_support import line_plane_intersection
+
+#import robot classes
+from Gen3Lite_mesh import Gen3Lite          #robot1 = gen3lite
+from ur3_scaled import UR3_Scaled           #robot2 = ur3        
+from irb1200_mesh_v2 import IRB1200         #robot3 = irb1200
+
+#import other custom classes
+from environment_builder import EnvironmentBuilder
+from robot_gui import RobotGUI
+from human import Human
+
+'''
+------------------------- COMMON FUNCTIONS -------------------------
+'''
+
+def moving_wall_collision(human, baserobot, robot_id):
+    """
+    持續監測 base_geom 是否撞到 human 的四面隱形牆，
+    撞到時觸發 e_stop=True,並印出警示。
+    """
+    
+    HUMAN_SAFE_RADIUS = 0.6
+
+    while True:
+        hx, hy, hz = human.T[0, 3], human.T[1, 3], human.T[2, 3]
+        T = baserobot.T
+        # 六條邊線
+        p0_x  = (T * SE3(-0.25, 0, 0))[0:3, 3]
+        p1_x  = (T * SE3( 0.25, 0, 0))[0:3, 3]
+        p0_y  = (T * SE3(0, -0.25, 0))[0:3, 3]
+        p1_y  = (T * SE3(0,  0.25, 0))[0:3, 3]
+        p0_d1 = (T * SE3(-0.25, -0.25, 0))[0:3, 3]
+        p1_d1 = (T * SE3( 0.25,  0.25, 0))[0:3, 3]
+        p0_d2 = (T * SE3(-0.25,  0.25, 0))[0:3, 3]
+        p1_d2 = (T * SE3( 0.25, -0.25, 0))[0:3, 3]
+
+        # 動態牆
+        moving_planes = {
+            "front": {"normal": [0, -1, 0], "point": [hx, hy + HUMAN_SAFE_RADIUS, hz],
+                      "location_x": [hx - HUMAN_SAFE_RADIUS, hx + HUMAN_SAFE_RADIUS],
+                      "location_y": [hy + HUMAN_SAFE_RADIUS, hy + HUMAN_SAFE_RADIUS]},
+            "back":  {"normal": [0, 1, 0], "point": [hx, hy - HUMAN_SAFE_RADIUS, hz],
+                      "location_x": [hx - HUMAN_SAFE_RADIUS, hx + HUMAN_SAFE_RADIUS],
+                      "location_y": [hy - HUMAN_SAFE_RADIUS, hy - HUMAN_SAFE_RADIUS]},
+            "right": {"normal": [-1, 0, 0], "point": [hx + HUMAN_SAFE_RADIUS, hy, hz],
+                      "location_x": [hx + HUMAN_SAFE_RADIUS, hx + HUMAN_SAFE_RADIUS],
+                      "location_y": [hy - HUMAN_SAFE_RADIUS, hy + HUMAN_SAFE_RADIUS]},
+            "left":  {"normal": [1, 0, 0], "point": [hx - HUMAN_SAFE_RADIUS, hy, hz],
+                      "location_x": [hx - HUMAN_SAFE_RADIUS, hx - HUMAN_SAFE_RADIUS],
+                      "location_y": [hy - HUMAN_SAFE_RADIUS, hy + HUMAN_SAFE_RADIUS]},
+        }
+
+        hit = False
+        for (p0, p1) in [(p0_x, p1_x), (p0_y, p1_y), (p0_d1, p1_d1), (p0_d2, p1_d2)]:
+            for plane_name, plane in moving_planes.items():
+                n, P = plane["normal"], plane["point"]
+                intersect, check = line_plane_intersection(n, P, p0, p1)
+                if check == 1:
+                    xmin, xmax = plane["location_x"]
+                    ymin, ymax = plane["location_y"]
+                    if xmin <= intersect[0] <= xmax and ymin <= intersect[1] <= ymax:
+                        print(f"🚨 E-STOP triggered! Robot hit human {plane_name} wall.")
+                        set_estop(robot_id)
+                        hit = True
+                        break
+            if hit:
+                break
+
+
+
+        time.sleep(0.05)
+
+#連桿碰撞檢測   Connecting rod collision detection (fkine_all) . common for all robots
+def check_collision(q, robot):
+    tr = robot.fkine_all(q).A
+    planes = {"floor": {"normal": [0, 0, 1], "point": [0, 0, 0],"location_x": [0, 10], "location_y": [0, 10]},
+              "wall1": {"normal": [0, 1, 0], "point": [0, 0,0],"location_x": [0, 10], "location_y": [0, 10]},
+              "wall2": {"normal": [0, 1, 0], "point": [9, 9, 0],"location_x": [0, 10], "location_y": [0,10]},        
+            }
+    for i in range(6):
+        p0 = tr[i][:3, 3]
+        p1 = tr[i+1][:3, 3]
+        for plane in planes.values():
+            n, P = plane["normal"], plane["point"]
+            intersect, check = line_plane_intersection(n, P, p0, p1)
+            if check == 1:
+                xmin, xmax = plane["location_x"]
+                ymin, ymax = plane["location_y"]
+                if xmin <= intersect[0] <= xmax and ymin <= intersect[1] <= ymax:
+                    return True
+    return False
+
+
+'''
+------------------------- ROBOT 1 FUNCTIONS -------------------------
+'''
+
+#robot 1
+def robot1_main_cycle():
+    """
+    Handles Robot 1's autonomous patrol and pick-and-place behavior.
+    Runs one iteration of its main logic.
+    Should be called repeatedly (e.g. from the global main loop).
+    """
+    global target_pos_world, target_ball, holding, trash_offset_gen3, current_trash_index
+
+    mode = get_mode()
+
+    # --- PATROL MODE ---
+    if state["r1_patrol"] and mode == "auto":
+        # Rotate in place
+        total_angle = np.pi
+        angle_step = total_angle / 20
+        for _ in range(20):
+            if is_estop(1) or get_mode() != "auto":
+                return
+            robot1.gripper.attach_to_robot(robot1)
+            base_geom.T = base_geom.T * SE3.Rz(angle_step)
+            robot1_stick_base()
+            env.step(0.05)
+            time.sleep(0.05)
+
+        # Patrol forward and scan for nearby trash
+        for _ in range(5):
+            if is_estop(1) or get_mode() != "auto":
+                return
+
+            distance = np.random.uniform(1.0, 2.0)
+            step_size = 0.05
+            steps = int(distance / step_size)
+
+            for _ in range(steps):
+                if is_estop(1) or get_mode() != "auto":
+                    return
+                robot1.gripper.attach_to_robot(robot1)
+                base_step_with_walls(base_geom, step_size)
+                robot1_stick_base()
+                env.step(0.05)
+                time.sleep(0.05)
+
+                # Detect nearby balls
+                for ball in list(balls):
+                    ball_pos_world = ball.T[:3, 3]
+                    base_pos = base_geom.T[:3, 3]
+                    dist = np.linalg.norm(ball_pos_world[:2] - base_pos[:2])
+                    if dist < 0.5:
+                        state["r1_patrol"] = False
+                        state["pick_and_place"] = True
+                        target_pos_world = ball_pos_world
+                        target_ball = ball
+                        print(f"🟡 Ball detected at {target_pos_world}")
+                        return
+
+            # Random turn between patrols
+            total_angle = np.random.uniform(-np.pi, np.pi)
+            angle_step = total_angle / 20
+            for _ in range(20):
+                if is_estop(1) or get_mode() != "auto":
+                    return
+                robot1.gripper.attach_to_robot(robot1)
+                base_geom.T = base_geom.T * SE3.Rz(angle_step)
+                robot1_stick_base()
+                env.step(0.05)
+                time.sleep(0.05)
+
+    # --- PICK & PLACE SEQUENCE ---
+    elif state["pick_and_place"] and target_pos_world is not None:
+        if not holding:
+            target = SE3(target_pos_world[0], target_pos_world[1], target_pos_world[2] + 0.08) * SE3.Rx(np.pi)
+            q_pick = robot1.ikine_LM(target, q0=robot1.q).q
+
+            for q in safe_rrt_path(robot1.q, q_pick):
+                if is_estop(1) or get_mode() != "auto":
+                    return
+                robot1.q = q
+                robot1.gripper.attach_to_robot(robot1)
+                env.step(0.02)
+
+            ee_T = robot1.fkine(robot1.q)
+            trash_offset_gen3 = ee_T.inv() * target_ball.T
+
+            # Close gripper
+            for i in range(50):
+                if is_estop(1) or get_mode() != "auto":
+                    return
+                robot1.gripper.close(i=i)
+                env.step(0.01)
+
+            holding = True
+            RMRC_lift()
+
+        # Move to home
+        go_to_home()
+        if is_estop(1) or get_mode() != "auto":
+            return
+
+        # Lower to drop area
+        q_down = robot1.ikine_LM(area.T * SE3.Rx(np.pi) * SE3(0, 0, -0.14), q0=robot1.q).q
+        for q in safe_rrt_path(robot1.q, q_down):
+            if is_estop(1) or get_mode() != "auto":
+                return
+            robot1.q = q
+            if holding and target_ball is not None:
+                target_ball.T = robot1.fkine(robot1.q) * trash_offset_gen3
+            robot1.gripper.attach_to_robot(robot1)
+            env.step(0.02)
+
+        # Open gripper
+        for i in range(50):
+            robot1.gripper.open(i=i)
+            env.step(0.01)
+
+        holding = False
+        trash_offset_gen3 = None
+        R_old = target_ball.T[:3, :3]
+        target_ball.T = SE3.Rt(R_old, (area.T * SE3(0, 0, 0.06))[:3, 3])
+
+        # Transfer to UR3
+        ur3_ball = target_ball
+        try:
+            current_trash_index = balls.index(target_ball)
+        except ValueError:
+            current_trash_index = None
+
+        balls.remove(target_ball)
+        area_trash.append(ur3_ball)
+        RMRC_lift()
+        state["pick_and_place"] = False
+        state["r1_patrol"] = True
+
+    # --- IDLE ---
+    else:
+        env.step(0.03)
+        time.sleep(0.03)
+
+#robot1 1 / base_geom
+#讓底座嘗試前進一步並檢查有沒有撞牆  Let the base try to move forward and check if it hits a wall
+def base_step_with_walls(base_geom, step_size=0.05):
+    planes = {
+            "wall1": {"normal": [0, 1, 0], "point": [0.1, 0, 0],"location_x": [0, 10], "location_y": [0, 10]},
+            "wall2": {"normal": [0, 1, 0], "point": [8.5, 8.5, 0],"location_x": [0, 10], "location_y": [0, 10]},
+            "wall3": {"normal": [1, 0, 0], "point": [4, 0, 0],"location_x": [0, 10], "location_y": [0, 10]}
+        }
+
+    T_now = base_geom.T
+    p0 = T_now[0:3, 3]                        # 當前位置
+    p1 = (T_now * SE3(step_size, 0, 0))[0:3, 3]  # 嘗試往前走一步後的位置
+
+    for plane in planes.values():
+        n, P = plane["normal"], plane["point"]       # 平面的法向量和通過點
+        intersect, check = line_plane_intersection(n, P, p0, p1)
+
+        if check == 1:  # 有交點
+            xmin, xmax = plane["location_x"]
+            ymin, ymax = plane["location_y"]
+
+            # 檢查交點是否在平面定義的矩形區域內
+            if xmin <= intersect[0] <= xmax and ymin <= intersect[1] <= ymax:
+                # 如果有撞到牆 → 隨機選轉角避免撞牆
+                angle = np.random.choice([np.pi, -np.pi, np.pi/2, -np.pi/2])
+                turn = angle / 20  # 每次要轉的小角度
+                print("撞到牆 Hitting the wall")
+                for _ in range(20):
+                   robot1.gripper.attach_to_robot(robot1) 
+                   base_geom.T = base_geom.T * SE3.Rz(turn)
+                   robot1_stick_base() 
+                   env.step(0.02)  # 更新環境 (動畫更順)
+                   time.sleep(0.02)  # 控制轉動速度
+                   
+                print("正在轉 turning")
+                return False
+  
+
+    # 如果所有平面都沒撞到 → 真的走一步
+    base_geom.T = T_now * SE3(step_size, 0, 0)
+    return True
+
+#robot1 (base_geom)
+#往基座走去  Go to the base
+def move_base_towards(base_geom, target_xy, step_size=0.05, max_iters=800):
+    def _yaw_of(T):
+        R = T[:3, :3]
+        return np.arctan2(R[1, 0], R[0, 0])
+        #機器人當前在 XY 平面的朝向 (yaw)
+    it = 0
+    while it < max_iters:
+        if is_estop(1) or get_mode() == "manual":
+            return
+        it += 1
+        p = base_geom.T[0:3, 3]
+        dx, dy = target_xy[0] - p[0], target_xy[1] - p[1]
+        #計算當前位置到目標的距離，如果比一步還短，就當作已經到達，停止迴圈。
+        if np.hypot(dx, dy) < step_size:
+            break
+        #(dx, dy) 計算出「理想的朝向角度」
+        desired_yaw = np.arctan2(dy, dx)
+        #底座目前的朝向角
+        cur_yaw = _yaw_of(base_geom.T)
+        #這段就是再算從cur_yaw轉到 desired_yaw最近需要轉的度數
+        yaw_err = (desired_yaw - cur_yaw + np.pi) % (2*np.pi) - np.pi
+        #要轉的角度差 yaw_err 限制在 ±yaw_step 之內，確保機器人每次只會小幅度轉向
+        turn = np.clip(yaw_err, -np.deg2rad(15), np.deg2rad(15))
+        base_geom.T = base_geom.T * SE3.Rz(turn)
+        #不是只有一次turn 因為是在while loop所以是轉一點走一步轉一點
+        moved = base_step_with_walls(base_geom, step_size)
+        #嘗試往前走一步，如果成功走了，moved=True；如果被牆擋住，moved=False
+
+        #「如果前面有牆擋住走不動，那就往目標方向的那一邊小轉 15° 再試。
+        if not moved:
+            base_geom.T = base_geom.T * SE3.Rz(np.sign(yaw_err) * np.deg2rad(15))
+
+        if holding ==True:
+            target_ball.T = robot1.fkine(robot1.q) * trash_offset_gen3
+
+        robot1.gripper.attach_to_robot(robot1)
+        robot1_stick_base()
+        env.step(0.03)
+        time.sleep(0.03)
+
+#robot1
+def safe_rrt_path(q1, q2, max_iters=300):
+    robot1.q = q1
+    env.step()
+    time.sleep(0.01)
+
+    q_waypoints = np.array([q1, q2])#目前已知的路徑點，最初只包含 [起點, 終點]
+    checked_till_waypoint = 0 #紀錄已經檢查到哪個 waypoint
+    q_matrix = [] #完整路徑（會存放所有插值後的關節軌跡）
+
+    iters = 0
+    while iters < max_iters:
+        if is_estop(1): 
+            return np.array(q_matrix) #回傳機器人已經走過路徑
+        iters += 1
+        start_waypoint = checked_till_waypoint
+        progressed = False
+
+        for i in range(start_waypoint, len(q_waypoints)-1):
+            if is_estop(1):   
+                return np.array(q_matrix)
+
+            q_traj = rtb.jtraj(q_waypoints[i], q_waypoints[i+1], 50).q
+            is_collision_check = any(check_collision(q, robot1) for q in q_traj)
+            #沒碰撞
+            if not is_collision_check:
+                q_matrix.extend(q_traj.tolist())
+                #把這段安全的插值軌跡加到完整路徑 q_matrix 裡。
+                checked_till_waypoint = i+1
+                # 表示：我已經確認「第 i → 第 i+1」這段路徑是安全的。
+                #下一輪從i+1點開始檢查
+                progressed = True
+                #試看看中繼點到終點 
+                q_traj2 = rtb.jtraj(q_matrix[-1], q2, 50).q
+                #又沒碰撞
+                if not any(check_collision(q, robot1) for q in q_traj2):
+                    #把剩下路徑加到qmatrix
+                    q_matrix.extend(q_traj2.tolist())
+                    return np.array(q_matrix)
+            else:
+                #有撞到
+                #隨機加一組q (-pi到pi)
+                q_rand = (2 * np.random.rand(robot1.n) - 1) * np.pi
+                #check會不會撞
+                while check_collision(q_rand, robot1):
+                    if is_estop(1):  
+                        return np.array(q_matrix)
+                    #會撞再重新生成一組新的
+                    q_rand = (2 * np.random.rand(robot1.n) - 1) * np.pi
+                #不會撞就把這個安全的隨機點 插入到目前的 waypoint 路徑裡
+                q_waypoints = np.concatenate(
+                    (q_waypoints[:i+1], [q_rand], q_waypoints[i+1:]),
+                   # q_waypoints[:i+1] 起點到第i個
+                    axis=0
+                    #axis=0 → 沿著「列 (row)」的方向操作
+                )
+                progressed = True
+                break
+
+        if not progressed:
+        #避免進入死循環(沒新增路徑、沒新增隨機點)
+            print(f"死循環") 
+            return rtb.jtraj(q1, q2, 50).q
+        
+
+    return rtb.jtraj(q1, q2, 50).q  
+    #如果嘗試了 max_iters 次還沒找到路徑 → 直接回傳直線插值（最後手段）
+
+#robot1
+def robot1_stick_base():
+    robot1.base = base_geom.T * SE3(0, 0, 0.12)
+
+#robot1
+def RMRC_lift():
+    steps = 60
+    delta_t = 0.02
+    lift_h = 0.50#抬升的總高度 = 0.5 公尺
+
+    T0 = robot1.fkine(robot1.q).A
+    z0 = T0[2, 3]
+    z1 = z0 + lift_h
+
+    #產生 z0-z1的平滑中間點
+    s = trapezoidal(0, 1, steps).q
+    z = (1 - s) * z0 + s * z1
+    #建立一個矩陣來存放 每一步的關節角度
+    q_matrix = np.zeros((steps, robot1.n))
+    #把目前的機械臂關節角度存到 q_matrix 的第 0 行
+    q_matrix[0, :] = robot1.q.copy()
+
+    for i in range(steps - 1):
+        if is_estop(1):  
+            return
+        #Z速
+        zdot = (z[i + 1] - z[i]) / delta_t
+        #x速
+        xdot = np.array([0.0, 0.0, zdot])
+        #當前關節角度下的 Jacobian 矩陣
+        J = robot1.jacob0(q_matrix[i, :])
+        Jv = J[:3, :]
+        #計算所需關節速度
+        qdot = np.linalg.pinv(Jv) @ xdot
+        #下一個關節= 這個關節加上q速(q變化量)
+        q_matrix[i + 1, :] = q_matrix[i, :] + delta_t * qdot
+    #走過q
+    for q in q_matrix:
+        if is_estop(1):   
+            return
+        robot1.q = q
+        if holding == True:
+            target_ball.T = robot1.fkine(robot1.q) * trash_offset_gen3
+        robot1.gripper.attach_to_robot(robot1)
+        env.step( 0.02)
+        time.sleep( 0.02)
+
+#robot1
+def go_to_home():
+   
+        move_base_towards(base_geom, target_xy=(4, 5.7), step_size=0.05)
+        target_ball.T = robot1.fkine(robot1.q) * trash_offset_gen3
+        robot1.gripper.attach_to_robot(robot1)
+        env.step(0.03)
+        time.sleep(0.03)
+
+'''
+------------------------- ROBOT 2 FUNCTIONS -------------------------
+'''
+
+#robot2
+def rmrc_move_ur3(robot, env, T_start, T_goal,
+              steps=80, delta_t=0.015, epsilon=0.05, lambda_max=0.1, 
+              follow_object=False, obj=None, obj_offset=None, z_arc=False, ee_down=True):
+
+    # Helper: Damped Least Squares inverse
+    def damped_ls(J, lam):
+        return np.linalg.inv(J.T @ J + lam**2 * np.eye(J.shape[1])) @ J.T
+
+    # Create trajectory in Cartesian space (interpolated positions)
+    s_profile = trapezoidal(0, 1, steps)
+    s = s_profile.q
+    x = np.zeros((3, steps))
+    theta = np.zeros((3, steps))
+
+    R_down = SO3.Rx(np.pi)              # -Z (gripper facing down)
+    R0     = SO3(T_start.R)             # start orientation as SO3
+    R1     = R_down                     # target orientation
+
+
+    if ee_down:
+        R0 = SO3(T_start.R)
+        R1 = SO3.Rx(np.pi)
+    else:
+        R0 = SO3(T_start.R)
+        R1  = SO3(T_goal.R)
+
+
+    for i in range(steps):
+        # Linear interpolation between start and goal
+        x[0, i] = (1 - s[i]) * T_start.t[0] + s[i] * T_goal.t[0]
+        x[1, i] = (1 - s[i]) * T_start.t[1] + s[i] * T_goal.t[1]
+        x[2, i] = (1 - s[i]) * T_start.t[2] + s[i] * T_goal.t[2]
+
+        if z_arc == True:
+            x[2, i] += 0.15 * np.sin(np.pi * s[i])
+    
+        # Keep gripper vertical
+        #theta[:, i] = [np.pi, 0, 0]
+        R_interp   = R0.interp(R1, s[i])         # slerp
+        theta[:, i] = tr2rpy(R_interp.R)
+
+    # Initialize storage
+    q_matrix = np.zeros((steps, robot.n))
+    qdot = np.zeros((steps, robot.n))
+    m = np.zeros(steps)
+    q_matrix[0, :] = robot.q.copy()
+    #qlim = np.array(robot.qlim).T
+
+    # RMRC loop
+    for i in range(steps - 1):
+
+        if is_estop(2):
+            print("🚨 E-STOP: UR3 motion halted.")
+            return q_matrix[i, :]
+
+        # --- Forward kinematics ---
+        T = robot.fkine(q_matrix[i, :]).A
+        pos, R = T[:3, 3], T[:3, :3]
+
+        # --- Compute desired motion ---
+        delta_x = x[:, i + 1] - pos
+        Rd = rpy2r(theta[0, i + 1], theta[1, i + 1], theta[2, i + 1])
+        Rdot = (Rd - R) / delta_t
+        S = Rdot @ R.T
+
+        linear_velocity = delta_x / delta_t
+        angular_velocity = np.array([S[2, 1], S[0, 2], S[1, 0]])
+        xdot = np.hstack((linear_velocity, angular_velocity))
+        W = np.diag([1,1,1, 0.5,0.5,0.5])
+        xdot = W @ xdot
+
+        # --- Jacobian and manipulability ---
+        J = robot.jacob0(q_matrix[i, :])
+        m[i] = np.sqrt(np.linalg.det(J @ J.T))
+        if m[i] < epsilon:  #Check if we are near a singularity
+            ratio = m[i] / epsilon          ## ranges from 0 (at singularity) to 1 (safe)
+            lam = (1 - ratio) * lambda_max  # damping value between 0 → lambda_max
+        else:
+            lam = 0                 # If robot is not near singularity, no damping needed
+        invJ = damped_ls(J, lam)
+
+        # --- Solve joint velocities ---
+        qdot[i, :] = (invJ @ xdot).T
+    
+
+        # --- Integrate joint motion ---
+        q_matrix[i + 1, :] = q_matrix[i, :] + delta_t * qdot[i, :]
+
+        # --- Update robot in Swift ---
+        robot.q = q_matrix[i + 1, :]
+        robot2.gripper.attach_to_robot(robot2)
+
+        # --- For picking up objects ---
+        if follow_object and obj is not None:
+            global trash_offset_ur3
+            if obj_offset is True:
+                obj.T = robot.fkine(robot.q) * trash_offset_ur3
+            else:
+                obj.T = robot.fkine(robot.q) * SE3(0, 0, 0.06) * SE3.Rx(np.pi)
+            
+
+        if is_estop(2):
+            print("🚨 E-STOP: UR3 motion halted.")
+            return q_matrix[i, :]
+
+        env.step(delta_t)
+
+        if is_estop(2):
+            print("🚨 E-STOP: UR3 motion halted.")
+            return q_matrix[i, :]
+
+    return q_matrix[-1, :]
+
+#robot2
+def ur3_pick_and_place():
+    global current_trash_index, current_ur3_object, trash_offset_ur3, crusher_trigger
+
+    q_rest = np.array([np.pi/4 - 0.15, -np.pi/2 + 0.15, - 0.3, -np.pi/2 - 0.15, np.pi/2, 0])
+    q_pick  = robot2.ikine_LM(area.T * SE3.Tz(0.1) * SE3.Rx(np.pi),  q0=np.array([np.pi/4 + -0.15, -3*np.pi/4 + 0.15, -np.pi/2 + -0.15, -np.pi/4, np.pi/2, 0])).q
+    q_place = robot2.ikine_LM(area_place.T * SE3.Tz(0.1) * SE3.Rx(np.pi), q0=np.array([-3*np.pi/8, -7*np.pi/8, -np.pi/4, -np.pi/4, np.pi/2, 0])).q
+    q_box   = robot2.ikine_LM(area_box.T * SE3.Tz(0.1) * SE3.Rx(np.pi),   q0=np.array([-7*np.pi/8, -2*np.pi + 0.15, -np.pi/4, -np.pi/4, np.pi/2, 0])).q
+
+    T_rest  = robot2.fkine(q_rest)
+    T_pick  = robot2.fkine(q_pick) * SE3(0, 0, -0.06)
+    T_place = robot2.fkine(q_place)* SE3(0, 0, 0.04)
+    T_box   = robot2.fkine(q_box)
+
+    while len(area_trash) > 0:
+
+        if is_estop(2):
+            print("⚠️ E-STOP")
+            return
+
+        ur3_ball = area_trash[0]
+        current_ur3_object = ur3_ball
+
+        rmrc_move_ur3(robot2, env, T_rest, T_pick)        # traj1
+
+        ee_T = robot2.fkine(robot2.q)
+        trash_offset_ur3 = ee_T.inv() * ur3_ball.T
+
+        for i in range(50):
+            robot2.gripper.close(i=i)       #close gripper
+            env.step(0.01)
+
+        rmrc_move_ur3(robot2, env, T_pick, T_place, follow_object=True, obj=ur3_ball, obj_offset=True, ee_down=False, z_arc=True)       # traj2
+
+        for i in range(50):
+            robot2.gripper.open(i=i)        #open gripper
+            env.step(0.01)
+
+        ur3_ball.T = area_place.T  
+
+        rmrc_move_ur3(robot2, env, T_place, T_rest)       # traj3
+
+        crusher_trigger = True
+        print("🟣 Crusher trigger set! (trash index:", current_trash_index, ")")
+
+        time.sleep(4.0) 
+
+        rmrc_move_ur3(robot2, env, T_rest, T_place, ee_down=False)       # traj4
+
+        for i in range(50):
+            robot2.gripper.close(i=i)       #close gripper
+            env.step(0.01)
+
+        rmrc_move_ur3(robot2, env, T_place, T_box, follow_object=True, obj=crushed, ee_down=False, z_arc=True)        # traj5
+
+        for i in range(50):
+            robot2.gripper.open(i=i)        #open gripper
+            env.step(0.01)
+
+        crushed.T = area_box.T * SE3.Tz(-0.1)
+
+        rmrc_move_ur3(robot2, env, T_box, T_rest, ee_down=False)         # traj6
+
+        area_trash.remove(ur3_ball)
+
+
+'''
+------------------------- ROBOT 3 FUNCTIONS -------------------------
+'''
+
+#robot 3
+def swap_to_crushed_object():
+    """
+    Swaps the current UR3 object with its corresponding crushed version.
+    """
+    global crushed, current_ur3_object, current_trash_index, squashed_trash_list
+
+    # Safety check: nothing to crush yet
+    if current_ur3_object is None or current_trash_index is None:
+        print("⚠️ No current UR3 object to crush.")
+        return None
+
+    # Move the original object below the floor
+    current_ur3_object.T = SE3(current_ur3_object.T) * SE3(0, 0, -2.0)
+
+    # Bring up its corresponding squashed object
+    crushed = squashed_trash_list[current_trash_index]
+    crushed.T = area_place.T * SE3.Tz(0.01)
+    env.step()
+    print(f"🟣 Crushed object #{current_trash_index} swapped in.")
+    return crushed   # ✅ return the reference
+
+# robot3
+def crusher_rmrc_trajectory():
+    """
+    Improved RMRC version for IRB1200 crusher.
+    Combines Lab9 & UR3 damping + smooth orientation control.
+    """
+
+    if get_mode() != "auto" or not is_robot_active(3):   # (for robot3)
+        print("🔴 IRB1200 crusher paused (manual mode or inactive).")
+        return
+
+    steps = 35
+    delta_t = 0.02
+    epsilon = 0.05          # Manipulability threshold
+    lambda_max = 0.1         # Max damping
+    W = np.diag([1, 1, 1, 0.3, 0.3, 0.3])  # Linear vs angular weighting
+
+    # Define start & end poses (vertical crush motion)
+    R_down_start = SO3.Rx(np.pi)                 # Facing -Z
+    R_down_end   = SO3.Rx(np.pi)                 # Same orientation
+    T_start = SE3(area_place.T) * SE3(0, 0, 0.75) * SE3.Rx(np.pi)
+    T_end   = SE3(area_place.T) * SE3(0, 0, 0.17) * SE3.Rx(np.pi)
+
+
+    # Generate smooth trapezoidal position trajectory
+    s = trapezoidal(0, 1, steps).q
+    x = np.zeros((3, steps))
+    for i in range(steps):
+        x[:, i] = (1 - s[i]) * T_start.t + s[i] * T_end.t
+
+    # Orientation interpolation (SO3 slerp)
+    R_traj = [R_down_start.interp(R_down_end, si) for si in s]
+
+    # Initialise storage
+    q_matrix = np.zeros((steps, robot3.n))
+    qdot = np.zeros((steps, robot3.n))
+    m = np.zeros(steps)
+
+    # Initial joint pose
+    q_matrix[0, :] = robot3.ikine_LM(
+        T_start, q0=np.array([0, np.pi/4, 0, 0, np.pi/4, 0])
+    ).q
+
+    print("🦾 Starting improved crusher RMRC sequence...")
+
+    # --- RMRC Loop (downward motion) ---
+    for i in range(steps - 1):
+        if is_estop(3):
+            print("🚨 E-STOP triggered.")
+            return
+
+        # Forward kinematics
+        T_now = robot3.fkine(q_matrix[i, :]).A
+        pos, R_now = T_now[:3, 3], SO3(T_now[:3, :3])
+
+        # Desired next pose
+        delta_x = x[:, i + 1] - pos
+        R_next = R_traj[i + 1]
+        Rdot = (R_next.R - R_now.R) / delta_t
+        S = Rdot @ R_now.R.T
+
+        # Linear + angular velocity
+        linear_velocity = delta_x / delta_t
+        angular_velocity = np.array([S[2, 1], S[0, 2], S[1, 0]])
+        xdot = np.hstack((linear_velocity, angular_velocity))
+        xdot = W @ xdot
+
+        # Jacobian & manipulability
+        J = robot3.jacob0(q_matrix[i, :])
+        m[i] = np.sqrt(np.linalg.det(J @ J.T))
+
+        # Adaptive damping
+        if m[i] < epsilon:
+            ratio = m[i] / epsilon
+            lam = (1 - ratio) * lambda_max
+        else:
+            lam = 0
+
+        # Damped Least Squares inverse
+        invJ = np.linalg.inv(J.T @ J + lam**2 * np.eye(J.shape[1])) @ J.T
+
+        # Joint velocities and integration
+        qdot[i, :] = (invJ @ xdot).T
+        q_next = q_matrix[i, :] + delta_t * qdot[i, :]
+        q_next = np.clip(q_next, robot3.qlim[0, :], robot3.qlim[1, :])
+        q_matrix[i + 1, :] = q_next
+
+        # Update robot + crusher model
+        robot3.q = q_next
+        robot3.ee.attach_to_robot(robot3)
+        env.step(delta_t)
+        time.sleep(delta_t)
+
+    # Try to swap object after crush
+    try:
+        if is_estop(3):
+            print("⚠️ E-STOP: Crusher stopped before swapping object.")
+            return
+        
+        global crushed
+        crushed = swap_to_crushed_object()
+
+    except Exception as e:
+        print(f"⚠️ Swap error during crushing: {e}")
+
+    # -------------------------
+    # Upward release motion
+    # -------------------------
+    for q in q_matrix[::-1]:
+        if is_estop(3):
+            print("🚨 E-STOP mid-release.")
+            return
+        robot3.q = q
+        robot3.ee.attach_to_robot(robot3)
+        env.step(delta_t)
+        time.sleep(delta_t)
+
+    print("✅ Crusher RMRC sequence complete!")
+
+'''
+------------------------- INITIALISE 始化環境 -------------------------
+'''
+
+env_builder = EnvironmentBuilder()
+env = env_builder.env
+
+area = env_builder.area
+area_place = env_builder.area_place
+area_box = env_builder.area_box
+
+#robot init
+
+robot1 = Gen3Lite()
+robot2 = UR3_Scaled()
+robot3 = IRB1200()
+
+#robot1 base
+base_geom=Sphere(radius=0.2, color= (0.45, 0.42, 0.40, 1))
+base_geom.T = SE3(6, 5, -0.01) 
+
+#robot2 base
+robot2_base = Cylinder(radius=0.1, length=0.6,
+                       color=[0.3, 0.3, 0.5, 1],
+                       pose=SE3(2.9, 5.6, 0.1))
+robot2.base = robot2_base.T * SE3(0, 0, 0.05)
+
+#robot3 base
+robot3.base = robot3.base * area_place.T * SE3.Ty(-0.3) * SE3.Rz(np.pi/2) 
+robot3_base = Cylinder(radius=0.25, length=0.6,
+                       color=(0.20, 0.12, 0.06),
+                       pose=robot3.base * SE3(0, 0, -0.31)) 
+
+env.add(base_geom)
+env.add(robot2_base)
+env.add(robot3_base)
+
+robot2.q = np.array([np.pi/4 - 0.15, -np.pi/2 + 0.15, - 0.3, -np.pi/2 - 0.15, np.pi/2, 0])
+robot3.q = np.array([-5.734102970222921e-09, -0.12308620608416643, -0.002540056574218852,
+                     9.292429048457507e-10, 1.6964225904475079, -1.570796331431561])
+
+robot1.add_to_env(env)
+robot2.add_to_env(env) 
+robot3.add_to_env(env)
+
+robot1.gripper.add_to_env(env)
+robot2.gripper.add_to_env(env)
+robot3.ee.add_to_env(env)
+
+robot1.gripper.attach_to_robot(robot1)
+robot2.gripper.attach_to_robot(robot2)
+robot3.ee.attach_to_robot(robot3)
+
+
+#object init 
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+obj_dir = os.path.join(current_dir, "meshes", "obj")
+
+#spawn trash
+bottle3_stl_path = os.path.join(obj_dir, "bottle3.stl")
+bottle2_stl_path = os.path.join(obj_dir, "bottle2.stl")
+paper2_stl_path = os.path.join(obj_dir, "paper2.stl")
+
+def spawn_random_trash(
+    env,
+    n_items: int = 30,
+    x_range=(4, 9),
+    y_range=(0, 9),
+    floor_z: float = 0.05,
+):
+    """
+    Spawn random trash meshes into the environment and a matching list of
+    'crushed' cylinders kept index-aligned with the original items.
+
+    Returns:
+        balls (list): original trash Mesh objects added to env
+        area_trash (list): initially empty list for UR3 workflow
+        squashed_trash_list (list): crushed Cylinder objects added to env
+    """
+    balls = []
+    area_trash = []               
+    squashed_trash_list = []
+
+    for _ in range(n_items):
+        # Randomly choose a trash STL type
+        trash_type = random.choice([
+            (bottle3_stl_path, [0.35, 0.35, 0.35], [np.random.uniform(0.0, 0.2), np.random.uniform(0.2, 0.5), np.random.uniform(0.5, 0.9), np.random.uniform(0.4, 0.7)]),  # 藍瓶
+            (bottle2_stl_path, [0.35, 0.35, 0.25], [np.random.uniform(0.7, 1.0), np.random.uniform(0.2, 0.5), np.random.uniform(0.0, 0.2), np.random.uniform(0.5, 1.0)]),  # 橘紅瓶
+            (paper2_stl_path,  [0.0018, 0.0018, 0.0018], [0.92, 0.92, 0.92, 1])  # 小紙屑
+        ])
+        fname, scale, color = trash_type
+
+        # Random floor position + orientation
+        x = np.random.uniform(*x_range)
+        y = np.random.uniform(*y_range)
+        pose = SE3(x, y, floor_z) * SE3.Rx(np.pi/2) * SE3.Ry(np.random.uniform(-np.pi, np.pi))
+
+        # Visible trash
+        trash = Mesh(fname, pose=pose, scale=scale, color=color)
+        env.add(trash)
+        balls.append(trash)
+
+        # Hidden crushed partner (kept below floor; same index as trash)
+        crushed = Cylinder(
+            radius=0.05 * 1.3,
+            length=0.05 * 0.25,
+            color=[0.5, 0.5, 0.5, 1],
+            pose=SE3(x, y, -1.0)
+        )
+        env.add(crushed)
+        squashed_trash_list.append(crushed)
+
+    return balls, area_trash, squashed_trash_list
+
+balls, area_trash, squashed_trash_list = spawn_random_trash(env)
+
+#add human / mobile collision obj
+
+human_obj = Human(env, obj_dir)
+
+
+'''
+------------------------- STATES, E-STOP AND GUI -------------------------
+'''
+
+
+state = {
+    "mode": "auto",
+    "auto": True,
+    "r1_patrol": True,        # robot1 patrol flag
+    "r2_active": True,
+    "r3_active": True,
+
+    "pick_and_place": False,
+    "target_pos_world": None,
+    "target_ball": None,
+}
+
+# 狀態 state
+target_pos_world = None 
+target_ball = None 
+holding = False
+
+crusher_trigger = False
+crusher_busy = False
+
+current_trash_index = None
+current_ur3_object = None
+trash_offset_ur3 = None
+trash_offset_gen3 = None
+
+r2_thread = None
+
+
+# E-STOP SYSTEM 
+estop_r1 = threading.Event()       # Robot 1 (Gen3Lite)
+estop_r2 = threading.Event()       # Robot 2 (UR3)
+estop_r3 = threading.Event()       # Robot 3 (IRB1200)
+
+gui = RobotGUI(
+    env=env,
+    robot1=robot1,
+    robot2=robot2,
+    robot3=robot3,
+    gripper_stick_arm=lambda: robot1.gripper.attach_to_robot(robot1),
+    robot1_stick_base=robot1_stick_base,
+    gripper_stick_arm2=lambda: robot2.gripper.attach_to_robot(robot2),
+    update_robot3_ee=lambda: robot3.ee.attach_to_robot(robot3),
+    state_dict=state,
+    set_estop_func=lambda rid=None, val=True: set_estop(rid, val),
+    clear_estop_func=lambda rid=None: set_estop(rid, False)
+)
+
+def is_estop(robot_id=None):
+    """Check E-STOP for a given robot or global."""
+    if robot_id == 1:
+        return estop_r1.is_set() or state.get("r1_estop", False)
+    elif robot_id == 2:
+        return estop_r2.is_set() or state.get("r2_estop", False)
+    elif robot_id == 3:
+        return estop_r3.is_set() or state.get("r3_estop", False)
+    return False
+
+def set_estop(robot_id=None, value=True):
+    """Set or clear E-STOP for a specific robot (or global if None)."""
+    if robot_id is None:  
+        print("Please select which robot to target.")
+
+    event = {1: estop_r1, 2: estop_r2, 3: estop_r3}.get(robot_id)
+    if event is None:
+        return
+    
+    if value:
+        event.set()
+        state[f"r{robot_id}_estop"] = True     # ✅ sync GUI state
+        sync_estop_label(robot_id, True)
+        print(f"🚨 E-STOP ON — Robot {robot_id} halted.")
+    else:
+        event.clear()
+        state[f"r{robot_id}_estop"] = False    # ✅ sync GUI state
+        sync_estop_label(robot_id, False)
+        print(f"✅ E-STOP CLEARED — Robot {robot_id} ready.")
+ 
+def get_mode():
+    """Return current robot mode (auto/manual/etc.)."""
+    return state["mode"]
+
+def set_mode(value: str):
+    """Change robot mode and keep GUI in sync."""
+    state["mode"] = value
+
+def activate_robot(robot_id, active=True):
+    """Activate or deactivate robot based on current mode."""
+    if robot_id == 2:
+        state["r2_active"] = active
+        print(f"{'🟢' if active else '🔴'} Robot 2 {'activated' if active else 'paused'}")
+    elif robot_id == 3:
+        state["r3_active"] = active
+        print(f"{'🟢' if active else '🔴'} Robot 3 {'activated' if active else 'paused'}")
+
+def is_robot_active(robot_id):
+    """Return whether a robot is currently active."""
+    if robot_id == 2:
+        return state.get("r2_active", False)
+    elif robot_id == 3:
+        return state.get("r3_active", False)
+    return False
+
+def keep_swift_alive(env):
+    """Ensures Swift keeps rendering even during E-STOPs."""
+    while True:
+        env.step(0.05)
+        time.sleep(0.05)
+
+def sync_estop_label(robot_id, is_active=True):
+    """Update GUI E-STOP button label & colour when triggered externally."""
+    btn_map = {1: gui.estop_btn_r1, 2: gui.estop_btn_r2, 3: gui.estop_btn_r3}
+    if robot_id not in btn_map:
+        return
+    btn = btn_map[robot_id]
+
+    if is_active:
+        btn.desc = f"🚨 E-STOP ACTIVE (Robot {robot_id})"
+        btn.color = "#FF0000"
+    else:
+        btn.desc = f"🟢 E-STOP (Robot {robot_id})"
+        btn.color = "#4CAF50"
+
+def crusher_watcher():
+    global crusher_trigger, crusher_busy, current_trash_index
+    while True:
+        if crusher_trigger and not crusher_busy:
+            crusher_trigger = False
+            crusher_busy = True
+            print("🟢 Crusher thread starting...")
+
+            def run_crusher():
+                try:
+                    # Pass both the object and environment safely
+                    crusher_rmrc_trajectory()
+                except Exception as e:
+                    print(f"⚠️ Crusher error: {e}")
+                finally:
+                    global crusher_busy
+                    crusher_busy = False
+                    print("✅ Crusher finished, ready for next trigger")
+
+            threading.Thread(target=run_crusher, daemon=True).start()
+        time.sleep(0.1)
+
+# Start watcher threads
+threading.Thread(target=crusher_watcher, daemon=True).start()
+threading.Thread(target=moving_wall_collision, args=(human_obj.human,base_geom, 1), daemon=True).start()
+threading.Thread(target=moving_wall_collision, args=(human_obj.human,robot3_base, 3), daemon=True).start()
+threading.Thread(target=moving_wall_collision, args=(human_obj.human,robot2_base, 2), daemon=True).start()
+threading.Thread(target=keep_swift_alive, args=(env,), daemon=True).start()
+
+
+'''
+------------------------- MAIN LOOP 主迴圈 -------------------------
+'''
+
+while True:
+    mode = get_mode()
+
+    # --- AUTO MODE ---
+    if mode == "auto":
+        # Start or resume Robot 2 (UR3)
+        if not r2_thread or not r2_thread.is_alive():
+            if not is_robot_active(2):
+                activate_robot(2, True)
+            r2_thread = threading.Thread(target=ur3_pick_and_place, daemon=True)
+            r2_thread.start()
+
+        # Start or resume Robot 3 (Crusher)
+        if not is_robot_active(3):
+            activate_robot(3, True)
+
+
+    # --- MANUAL MODE ---
+    elif mode == "manual":
+        if is_robot_active(2):
+            activate_robot(2, False)
+            set_estop(2, True)
+        if is_robot_active(3):
+            activate_robot(3, False)
+            set_estop(3, True)
+
+        robot1.gripper.attach_to_robot(robot1)
+        robot1_stick_base()
+        env.step(0.03)
+        time.sleep(0.03)
+        continue
+
+    # --- ROBOT 1 MAIN LOOP ---
+    robot1_main_cycle()
