@@ -23,7 +23,7 @@ from environment_builder import EnvironmentBuilder
 from robot_gui import RobotGUI
 from human import Human
 
-#import serial reader (for hardware e-stop)\
+#import serial reader (for hardware e-stop)
 import serial
 
 '''
@@ -34,6 +34,8 @@ def moving_wall_collision(human, baserobot, robot_id):
     """
     持續監測 base_geom 是否撞到 human 的四面隱形牆，
     撞到時觸發 e_stop=True,並印出警示。
+    Continuously monitor whether base_geom collides with any of the four invisible walls surrounding the human.
+    When a collision occurs, trigger e_stop = True and print a warning message.
     """
     
     HUMAN_SAFE_RADIUS = 0.6
@@ -83,12 +85,14 @@ def moving_wall_collision(human, baserobot, robot_id):
             if hit:
                 break
 
-
-
         time.sleep(0.05)
 
-#連桿碰撞檢測   Connecting rod collision detection (fkine_all) . common for all robots
 def check_collision(q, robot):
+    """
+    連桿碰撞檢測
+    Link collision detection
+    """
+    
     tr = robot.fkine_all(q).A
     planes = {"floor": {"normal": [0, 0, 1], "point": [0, 0, 0],"location_x": [0, 10], "location_y": [0, 10]},
               "wall1": {"normal": [0, 1, 0], "point": [0, 0,0],"location_x": [0, 10], "location_y": [0, 10]},
@@ -117,7 +121,6 @@ def robot1_main_cycle():
     """
     Handles Robot 1's autonomous patrol and pick-and-place behavior.
     Runs one iteration of its main logic.
-    Should be called repeatedly (e.g. from the global main loop).
     """
     global target_pos_world, target_ball, holding, trash_offset_gen3, current_trash_index
 
@@ -250,9 +253,12 @@ def robot1_main_cycle():
         env.step(0.03)
         time.sleep(0.03)
 
-#robot1 1 / base_geom
-#讓底座嘗試前進一步並檢查有沒有撞牆  Let the base try to move forward and check if it hits a wall
+
 def base_step_with_walls(base_geom, step_size=0.05):
+    """
+    讓底座嘗試前進一步並檢查有沒有撞牆
+    Let the base try to move forward and check if it hits a wall
+    """
     planes = {
             "wall1": {"normal": [0, 1, 0], "point": [0.1, 0, 0],"location_x": [0, 10], "location_y": [0, 10]},
             "wall2": {"normal": [0, 1, 0], "point": [8.5, 8.5, 0],"location_x": [0, 10], "location_y": [0, 10]},
@@ -260,14 +266,14 @@ def base_step_with_walls(base_geom, step_size=0.05):
         }
 
     T_now = base_geom.T
-    p0 = T_now[0:3, 3]                        # 當前位置
-    p1 = (T_now * SE3(step_size, 0, 0))[0:3, 3]  # 嘗試往前走一步後的位置
+    p0 = T_now[0:3, 3]                        # 當前位置    current position
+    p1 = (T_now * SE3(step_size, 0, 0))[0:3, 3]  # 嘗試往前走一步後的位置    the position after attempting to move one step forward.
 
     for plane in planes.values():
-        n, P = plane["normal"], plane["point"]       # 平面的法向量和通過點
+        n, P = plane["normal"], plane["point"]       # 平面的法向量和通過點    the plane’s normal vector and a point on the plane.
         intersect, check = line_plane_intersection(n, P, p0, p1)
 
-        if check == 1:  # 有交點
+        if check == 1:  # 有交點    if an intersection exists
             xmin, xmax = plane["location_x"]
             ymin, ymax = plane["location_y"]
 
@@ -1132,4 +1138,5 @@ while True:
 
     # --- ROBOT 1 MAIN LOOP ---
     robot1_main_cycle()
+
 
