@@ -48,8 +48,7 @@ class RobotGUI:
         self._build_mode_buttons()
         self._build_robot_select_buttons()
         self._build_sliders()
-
-        print("✅ Manual control system ready.")
+                     
         print("Press 🟡 Manual Mode to pause automation, then use Control Robot 1/2/3 + sliders to move each robot.")
 
     # ---------------------------------------------------
@@ -61,7 +60,7 @@ class RobotGUI:
             """Create per-robot E-STOP button with 3-state cycle."""
 
             states = [
-                (f"🟢 E-STOP (Robot {robot_id})", "#4CAF50"),     # normal
+                (f"E-STOP (Robot {robot_id})", "#4CAF50"),     # normal
                 (f"🚨 E-STOP ACTIVE (Robot {robot_id})", "#FF0000"),  # active
                 (f"⚪ RELEASE E-STOP? (Robot {robot_id})", "#CCCC00") # confirm release
             ]
@@ -190,7 +189,15 @@ class RobotGUI:
             self.selected_robot_display.color = color
             print(f"🎛 Now controlling: {name}")
 
-
+    def get_active_robot_id(self):
+        """Return 1, 2, or 3 depending on which robot is currently selected."""
+        if self.active_robot == self.robot1:
+            return 1
+        elif self.active_robot == self.robot2:
+            return 2
+        elif self.active_robot == self.robot3:
+            return 3
+        return None
 
 
     # ---------------------------------------------------
@@ -234,3 +241,4 @@ class RobotGUI:
             )
             self.env.add(s)
             
+
