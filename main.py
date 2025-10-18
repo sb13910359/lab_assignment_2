@@ -23,6 +23,9 @@ from environment_builder import EnvironmentBuilder
 from robot_gui import RobotGUI
 from human import Human
 
+#import serial reader (for hardware e-stop)\
+import serial
+
 '''
 ------------------------- COMMON FUNCTIONS -------------------------
 '''
@@ -1055,13 +1058,41 @@ def crusher_watcher():
             threading.Thread(target=run_crusher, daemon=True).start()
         time.sleep(0.1)
 
+# Arduino E-STOP
+def hardware_estop_listener():
+    """Listens to Arduino serial for 'ESTOP' or 'CLEAR' commands."""
+    while True:
+        if arduino:
+            try:
+                line = arduino.readline().decode('utf-8').strip()
+                if line:
+                    rid = gui.get_active_robot_id()         # Affect "Selected" robot 
+                    if rid is None:
+                        continue
+
+                    if "ESTOP" in line:                    # Checks serial monitor for "ESTOP" message from arduino (when button is pressed)
+                        print(f"🚨 Hardware E-STOP for Robot {rid}")
+                        set_estop(rid, True)
+
+            except Exception as e:
+                print("⚠️ Arduino read error:", e)
+        time.sleep(0.05)
+
+
+try:
+    arduino = serial.Serial('COM4', 9600, timeout=0.1)   
+    print("Arduino connected for hardware E-STOP.")
+except Exception as e:
+    print(f"Arduino not found: {e}")
+    arduino = None
+
 # Start watcher threads
 threading.Thread(target=crusher_watcher, daemon=True).start()
 threading.Thread(target=moving_wall_collision, args=(human_obj.human,base_geom, 1), daemon=True).start()
 threading.Thread(target=moving_wall_collision, args=(human_obj.human,robot3_base, 3), daemon=True).start()
 threading.Thread(target=moving_wall_collision, args=(human_obj.human,robot2_base, 2), daemon=True).start()
 threading.Thread(target=keep_swift_alive, args=(env,), daemon=True).start()
-
+threading.Thread(target=hardware_estop_listener, daemon=True).start()
 
 '''
 ------------------------- MAIN LOOP 主迴圈 -------------------------
@@ -1101,3 +1132,4 @@ while True:
 
     # --- ROBOT 1 MAIN LOOP ---
     robot1_main_cycle()
+
