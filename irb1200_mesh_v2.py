@@ -71,13 +71,13 @@ class IRB1200(DHRobot3D):
         d2r = np.pi / 180       # deg 2 rad helper
         qlim = [
             [-170 * d2r, 170 * d2r],
-            [-100 * d2r, 135 * d2r],
-            [-200 * d2r, 70  * d2r],
+            [-100 * d2r, 80 * d2r],
+            [-130 * d2r, 35  * d2r],
             [-270 * d2r, 270 * d2r],
             [-130 * d2r, 130 * d2r],
             [-360 * d2r, 360 * d2r]
         ]
-
+        
         for i in range(6):
             link = rtb.RevoluteDH(d=d[i], a=a[i], alpha=alpha[i], offset=offset[i], qlim=qlim[i])
             links.append(link)

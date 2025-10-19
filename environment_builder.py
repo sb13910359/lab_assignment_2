@@ -80,14 +80,16 @@ class EnvironmentBuilder:
         boxes = geometry.Mesh(os.path.join(env_dir,'Boxes.stl'),pose=SE3(2, 8.5, 0.1),color = (0.74, 0.56, 0.34), scale=[1,1, 1])   
         button1= geometry.Cylinder(radius=0.05, length=0.07, color=[1.0, 0.55, 0.0, 1]) 
         button2= geometry.Cylinder(radius=0.05, length=0.07, color=(0.6, 0.05, 0.05))  
+        button3= geometry.Cylinder(radius=0.05, length=0.07, color=(0.6, 0.7, 0.05))  
         button1.T=SE3(5.8, 0.3, 1.55)*SE3.Rx(pi/2)
         button2.T=SE3(5.8, 0.3, 1.35)*SE3.Rx(pi/2)
+        button3.T=SE3(5.6, 0.3, 1.35)*SE3.Rx(pi/2)
         
         shutter= geometry.Mesh(os.path.join(env_dir, 'shutter.stl'),pose=SE3(1, 8, 0)*SE3.Rx(pi/2)*SE3.Ry(pi/2),color =(0.55, 0.47, 0.40, 0.9),scale=[0.001, 0.0015, 0.003])   
         shelf = geometry.Mesh(os.path.join(env_dir, 'shelf.stl'),pose=SE3(9, 0.5, 0.5)*SE3.Rz(pi/2),color =(0.38, 0.26, 0.18, 0.9), scale=[0.6,0.6, 0.8])    
 
         for env_obj in [wall1, wall2, wall3, wall4, table, table_3, table2, table_area,
-                    fence1, fence2, fence3, saftey_button1, saftey_button2,
+                    fence1, fence2, fence3, saftey_button1, saftey_button2, button1, button2, button3,
                     floor, Workingzone, plate, plate2, fan,
                     window_wall, control1, control2, window, window1, window2,
                     shutter, small_can, small_can1, light1, light2,shelf,

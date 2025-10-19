@@ -60,9 +60,9 @@ class RobotGUI:
             """Create per-robot E-STOP button with 3-state cycle."""
 
             states = [
-                (f"E-STOP (Robot {robot_id})", "#4CAF50"),     # normal
-                (f"🚨 E-STOP ACTIVE (Robot {robot_id})", "#FF0000"),  # active
-                (f"⚪ RELEASE E-STOP? (Robot {robot_id})", "#CCCC00") # confirm release
+                (f"E-STOP (Robot {robot_id})"),     # normal
+                (f"🚨 E-STOP ACTIVE (Robot {robot_id})"),  # active
+                (f"⚪ RELEASE E-STOP? (Robot {robot_id})") # confirm release
             ]
             current_state = {"idx": 0}
 
@@ -88,15 +88,11 @@ class RobotGUI:
                     print(f"✅ E-STOP cleared — Robot {robot_id} ready.")
                     current_state["idx"] = 0
 
-                # --- update button label/colour ---
-                desc, colour = states[current_state["idx"]]
-                btn.desc = desc
-                btn.color = colour
+                # --- update button label/colour --- 
+                btn.desc = states[current_state["idx"]]
 
             # create button
-            desc, colour = states[current_state["idx"]]
-            btn = swift.Button(desc=desc, cb=toggle)
-            btn.color = colour
+            btn = swift.Button(desc=states[current_state["idx"]], cb=toggle)
             self.env.add(btn)
             return btn
 
@@ -117,10 +113,8 @@ class RobotGUI:
 
         if initial_mode == "manual":
             desc = "🟡 Manual Mode"
-            color = "#FFD700"
         else:
             desc = "🟢 Auto Mode"
-            color = "#4CAF50"
 
         def toggle_mode(_=None):
             """Switch between Manual and Auto modes."""
@@ -134,7 +128,6 @@ class RobotGUI:
                 self.state["pick_and_place"] = False
                 print("🟡 Switched to MANUAL MODE — sliders enabled for direct control.")
                 mode_btn.desc = "🟡 Manual Mode"
-                mode_btn.color = "#FFD700"
 
             else:
                 # switch to auto
@@ -145,11 +138,9 @@ class RobotGUI:
                 self.state["r3_active"] = True
                 print("🟢 Switched to AUTO MODE — autonomous sequences active.")
                 mode_btn.desc = "🟢 Auto Mode"
-                mode_btn.color = "#4CAF50"
 
         # Create the single toggle button
         mode_btn = swift.Button(desc=desc, cb=toggle_mode)
-        mode_btn.color = color
         self.env.add(mode_btn)
 
         # Store for reference (optional)
@@ -166,28 +157,26 @@ class RobotGUI:
         """Single button that cycles through Robot 1–3 each time it's clicked."""
 
         robots = [
-            (self.robot1, "Robot 1 (Gen3 Lite)", "#00FF00"),
-            (self.robot2, "Robot 2 (UR3)", "#1E90FF"),
-            (self.robot3, "Robot 3 (IRB1200)", "#FF69B4")
+            (self.robot1, "Robot 1 (Gen3 Lite)"),
+            (self.robot2, "Robot 2 (UR3)"),
+            (self.robot3, "Robot 3 (IRB1200)")
         ]
         self.robot_cycle_index = 0
-        self.active_robot, name, color = robots[self.robot_cycle_index]
+        self.active_robot, name = robots[self.robot_cycle_index]
 
         # --- Create one button ---
         self.selected_robot_display = swift.Button(
-            desc=f"🎛 Selected: {name}",
+            desc=f"Selected: {name}",
             cb=lambda _: cycle_robot()    # click cycles robot
         )
-        self.selected_robot_display.color = color
         self.env.add(self.selected_robot_display)
 
         def cycle_robot():
             """Cycle through robots when button is clicked."""
             self.robot_cycle_index = (self.robot_cycle_index + 1) % len(robots)
-            self.active_robot, name, color = robots[self.robot_cycle_index]
-            self.selected_robot_display.desc = f"🎛 Selected: {name}"
-            self.selected_robot_display.color = color
-            print(f"🎛 Now controlling: {name}")
+            self.active_robot, name = robots[self.robot_cycle_index]
+            self.selected_robot_display.desc = f"Selected: {name}"
+            print(f"Now controlling: {name}")
 
     def get_active_robot_id(self):
         """Return 1, 2, or 3 depending on which robot is currently selected."""

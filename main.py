@@ -471,7 +471,7 @@ def go_to_home():
 #robot2
 def rmrc_move_ur3(robot, env, T_start, T_goal,
               steps=80, delta_t=0.015, epsilon=0.05, lambda_max=0.1, 
-              follow_object=False, obj=None, obj_offset=None, z_arc=False, ee_down=True):
+              follow_object=False, obj=None, obj_offset=None, z_arc=False):
 
     # Helper: Damped Least Squares inverse
     def damped_ls(J, lam):
@@ -483,18 +483,8 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
     x = np.zeros((3, steps))
     theta = np.zeros((3, steps))
 
-    R_down = SO3.Rx(np.pi)              # -Z (gripper facing down)
     R0     = SO3(T_start.R)             # start orientation as SO3
-    R1     = R_down                     # target orientation
-
-
-    if ee_down:
-        R0 = SO3(T_start.R)
-        R1 = SO3.Rx(np.pi)
-    else:
-        R0 = SO3(T_start.R)
-        R1  = SO3(T_goal.R)
-
+    R1     = SO3(T_goal.R)               # target orientation   // SO3.Rx(np.pi)  
 
     for i in range(steps):
         # Linear interpolation between start and goal
@@ -503,7 +493,7 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
         x[2, i] = (1 - s[i]) * T_start.t[2] + s[i] * T_goal.t[2]
 
         if z_arc == True:
-            x[2, i] += 0.15 * np.sin(np.pi * s[i])
+            x[2, i] += 0.2 * np.sin(np.pi * s[i])
     
         # Keep gripper vertical
         #theta[:, i] = [np.pi, 0, 0]
@@ -520,15 +510,19 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
     # RMRC loop
     for i in range(steps - 1):
 
+        if get_mode() != "auto" or not is_robot_active(3):   # (for robot3)
+            print("🔴 UR3 paused (manual mode or inactive).")
+            return
+
         if is_estop(2):
-            print("🚨 E-STOP: UR3 motion halted.")
+            print("🚨 E-STOP: UR3")
             return q_matrix[i, :]
 
-        # --- Forward kinematics ---
+        # Forward kinematics
         T = robot.fkine(q_matrix[i, :]).A
         pos, R = T[:3, 3], T[:3, :3]
 
-        # --- Compute desired motion ---
+        # Compute desired motion
         delta_x = x[:, i + 1] - pos
         Rd = rpy2r(theta[0, i + 1], theta[1, i + 1], theta[2, i + 1])
         Rdot = (Rd - R) / delta_t
@@ -540,17 +534,17 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
         W = np.diag([1,1,1, 0.5,0.5,0.5])
         xdot = W @ xdot
 
-        # --- Jacobian and manipulability ---
+        # Jacobian and manipulability
         J = robot.jacob0(q_matrix[i, :])
         m[i] = np.sqrt(np.linalg.det(J @ J.T))
-        if m[i] < epsilon:  #Check if we are near a singularity
+        if m[i] < epsilon:      #Check if we are near a singularity
             ratio = m[i] / epsilon          ## ranges from 0 (at singularity) to 1 (safe)
             lam = (1 - ratio) * lambda_max  # damping value between 0 → lambda_max
         else:
             lam = 0                 # If robot is not near singularity, no damping needed
         invJ = damped_ls(J, lam)
 
-        # --- Solve joint velocities ---
+        # --- Solve joint velocities
         qdot[i, :] = (invJ @ xdot).T
     
 
@@ -560,6 +554,10 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
         # --- Update robot in Swift ---
         robot.q = q_matrix[i + 1, :]
         robot2.gripper.attach_to_robot(robot2)
+
+        if is_estop(2):
+            while is_estop(2):
+                time.sleep(0.05)
 
         # --- For picking up objects ---
         if follow_object and obj is not None:
@@ -571,14 +569,11 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
             
 
         if is_estop(2):
-            print("🚨 E-STOP: UR3 motion halted.")
-            return q_matrix[i, :]
+            while is_estop(2):
+                time.sleep(0.05)
 
         env.step(delta_t)
 
-        if is_estop(2):
-            print("🚨 E-STOP: UR3 motion halted.")
-            return q_matrix[i, :]
 
     return q_matrix[-1, :]
 
@@ -593,14 +588,16 @@ def ur3_pick_and_place():
 
     T_rest  = robot2.fkine(q_rest)
     T_pick  = robot2.fkine(q_pick) * SE3(0, 0, -0.06)
-    T_place = robot2.fkine(q_place)* SE3(0, 0, 0.04)
+    T_place = robot2.fkine(q_place)
     T_box   = robot2.fkine(q_box)
 
     while len(area_trash) > 0:
 
         if is_estop(2):
             print("⚠️ E-STOP")
-            return
+            while is_estop(2):
+                time.sleep(0.3)
+            
 
         ur3_ball = area_trash[0]
         current_ur3_object = ur3_ball
@@ -614,28 +611,44 @@ def ur3_pick_and_place():
             robot2.gripper.close(i=i)       #close gripper
             env.step(0.01)
 
-        rmrc_move_ur3(robot2, env, T_pick, T_place, follow_object=True, obj=ur3_ball, obj_offset=True, ee_down=False, z_arc=True)       # traj2
+        if is_estop(2):
+            while is_estop(2):
+                time.sleep(0.05)
+
+        while crusher_busy or is_estop(3):
+            print("🟡 UR3 waiting for IRB1200 to finish...")
+            time.sleep(0.2)
+
+        rmrc_move_ur3(robot2, env, T_pick, T_place, follow_object=True, obj=ur3_ball, obj_offset=True, z_arc=True)       # traj2
 
         for i in range(50):
             robot2.gripper.open(i=i)        #open gripper
             env.step(0.01)
 
-        ur3_ball.T = area_place.T  
+        ur3_ball.T = area_place.T * SE3(0,0,0.03)
 
         rmrc_move_ur3(robot2, env, T_place, T_rest)       # traj3
 
         crusher_trigger = True
         print("🟣 Crusher trigger set! (trash index:", current_trash_index, ")")
 
-        time.sleep(4.0) 
+        time.sleep(4.0)
 
-        rmrc_move_ur3(robot2, env, T_rest, T_place, ee_down=False)       # traj4
+        while crusher_busy or is_estop(3):
+            print("🟡 UR3 waiting for IRB1200 to finish...")
+            time.sleep(0.2)
+
+        rmrc_move_ur3(robot2, env, T_rest, T_place)       # traj4
 
         for i in range(50):
             robot2.gripper.close(i=i)       #close gripper
             env.step(0.01)
 
-        rmrc_move_ur3(robot2, env, T_place, T_box, follow_object=True, obj=crushed, ee_down=False, z_arc=True)        # traj5
+        while crusher_busy or is_estop(3):
+            print("🟡 UR3 waiting for IRB1200 to finish...")
+            time.sleep(0.2)
+
+        rmrc_move_ur3(robot2, env, T_place, T_box, follow_object=True, obj=crushed, z_arc=True)        # traj5
 
         for i in range(50):
             robot2.gripper.open(i=i)        #open gripper
@@ -643,7 +656,7 @@ def ur3_pick_and_place():
 
         crushed.T = area_box.T * SE3.Tz(-0.1)
 
-        rmrc_move_ur3(robot2, env, T_box, T_rest, ee_down=False)         # traj6
+        rmrc_move_ur3(robot2, env, T_box, T_rest)         # traj6
 
         area_trash.remove(ur3_ball)
 
@@ -678,7 +691,7 @@ def swap_to_crushed_object():
 def crusher_rmrc_trajectory():
 
     if get_mode() != "auto" or not is_robot_active(3):   # (for robot3)
-        print("🔴 IRB1200 crusher paused (manual mode or inactive).")
+        print("🔴 IRB1200 paused (manual mode or inactive).")
         return
 
     steps = 35
@@ -718,8 +731,10 @@ def crusher_rmrc_trajectory():
     # --- RMRC Loop (downward motion) ---
     for i in range(steps - 1):
         if is_estop(3):
-            print("🚨 E-STOP triggered.")
-            return
+            print("🚨 E-STOP active for IRB1200")
+            while is_estop(3):
+                time.sleep(0.1)  # wait until cleared
+            print("🟢 E-STOP cleared for IRB1200")
 
         # Forward kinematics
         T_now = robot3.fkine(q_matrix[i, :]).A
@@ -766,22 +781,26 @@ def crusher_rmrc_trajectory():
     # Try to swap object after crush
     try:
         if is_estop(3):
-            print("⚠️ E-STOP: Crusher stopped before swapping object.")
-            return
+            print("🚨 E-STOP active for IRB1200")
+            while is_estop(3):
+                time.sleep(0.1)  # wait until cleared
+            print("🟢 E-STOP cleared for IRB1200")
         
         global crushed
         crushed = swap_to_crushed_object()
 
     except Exception as e:
-        print(f"⚠️ Swap error during crushing: {e}")
+        print(f"Error during crushing: {e}")
 
     # -------------------------
     # Upward release motion
     # -------------------------
     for q in q_matrix[::-1]:
         if is_estop(3):
-            print("🚨 E-STOP mid-release.")
-            return
+            print("🚨 E-STOP active for IRB1200")
+            while is_estop(3):
+                time.sleep(0.1)  # wait until cleared
+            print("🟢 E-STOP cleared for IRB1200")
         robot3.q = q
         robot3.ee.attach_to_robot(robot3)
         env.step(delta_t)
@@ -863,11 +882,6 @@ def spawn_random_trash(
     """
     Spawn random trash meshes into the environment and a matching list of
     'crushed' cylinders kept index-aligned with the original items.
-
-    Returns:
-        balls (list): original trash Mesh objects added to env
-        area_trash (list): initially empty list for UR3 workflow
-        squashed_trash_list (list): crushed Cylinder objects added to env
     """
     balls = []
     area_trash = []               
@@ -892,7 +906,7 @@ def spawn_random_trash(
         env.add(trash)
         balls.append(trash)
 
-        # Hidden crushed partner (kept below floor; same index as trash)
+        # Hidden crushed trash (kept below floor; same index as trash)
         crushed = Cylinder(
             radius=0.05 * 1.3,
             length=0.05 * 0.25,
@@ -907,7 +921,6 @@ def spawn_random_trash(
 balls, area_trash, squashed_trash_list = spawn_random_trash(env)
 
 #add human / mobile collision obj
-
 human_obj = Human(env, obj_dir)
 
 
@@ -975,9 +988,10 @@ def is_estop(robot_id=None):
     return False
 
 def set_estop(robot_id=None, value=True):
-    """Set or clear E-STOP for a specific robot (or global if None)."""
+    """Set or clear E-STOP for a specific robot"""
     if robot_id is None:  
         print("Please select which robot to target.")
+        return
 
     event = {1: estop_r1, 2: estop_r2, 3: estop_r3}.get(robot_id)
     if event is None:
@@ -985,13 +999,13 @@ def set_estop(robot_id=None, value=True):
     
     if value:
         event.set()
-        state[f"r{robot_id}_estop"] = True     # ✅ sync GUI state
-        sync_estop_label(robot_id, True)
+        state[f"r{robot_id}_estop"] = True     # sync GUI state
+        sync_estop_label(robot_id, "active")
         print(f"🚨 E-STOP ON — Robot {robot_id} halted.")
     else:
         event.clear()
-        state[f"r{robot_id}_estop"] = False    # ✅ sync GUI state
-        sync_estop_label(robot_id, False)
+        state[f"r{robot_id}_estop"] = False    # sync GUI state
+        sync_estop_label(robot_id, "clear")
         print(f"✅ E-STOP CLEARED — Robot {robot_id} ready.")
  
 def get_mode():
@@ -1025,19 +1039,22 @@ def keep_swift_alive(env):
         env.step(0.05)
         time.sleep(0.05)
 
-def sync_estop_label(robot_id, is_active=True):
+def sync_estop_label(robot_id, state_label="active"):
     """Update GUI E-STOP button label & colour when triggered externally."""
     btn_map = {1: gui.estop_btn_r1, 2: gui.estop_btn_r2, 3: gui.estop_btn_r3}
     if robot_id not in btn_map:
         return
     btn = btn_map[robot_id]
 
-    if is_active:
+    if state_label == "active":
         btn.desc = f"🚨 E-STOP ACTIVE (Robot {robot_id})"
-        btn.color = "#FF0000"
-    else:
-        btn.desc = f"🟢 E-STOP (Robot {robot_id})"
-        btn.color = "#4CAF50"
+
+    elif state_label == "confirm":
+        btn.desc = f"⚪ RELEASE E-STOP? (Robot {robot_id})"
+
+    elif state_label == "clear":
+        btn.desc = f"E-STOP (Robot {robot_id})"
+
 
 def crusher_watcher():
     global crusher_trigger, crusher_busy, current_trash_index
@@ -1059,6 +1076,9 @@ def crusher_watcher():
                     print("✅ Crusher finished, ready for next trigger")
 
             threading.Thread(target=run_crusher, daemon=True).start()
+
+        if is_estop(3) and crusher_busy:
+            print("IRB1200 E-STOP while busy")
         time.sleep(0.1)
 
 # Arduino E-STOP
@@ -1068,14 +1088,24 @@ def hardware_estop_listener():
         if arduino:
             try:
                 line = arduino.readline().decode('utf-8').strip()
-                if line:
-                    rid = gui.get_active_robot_id()         # Affect "Selected" robot 
-                    if rid is None:
-                        continue
 
-                    if "ESTOP" in line:                    # Checks serial monitor for "ESTOP" message from arduino (when button is pressed)
-                        print(f"🚨 Hardware E-STOP for Robot {rid}")
-                        set_estop(rid, True)
+                if line.startswith("ESTOP_R"):
+                    rid = int(line[-1])             #check which button is pressed
+                    print(f"🚨 Hardware E-STOP pressed: Robot {rid}")
+                    set_estop(rid, True)
+                    sync_estop_label(rid, "active")
+
+                elif line.startswith("CONFIRM_R"):  #confirm?
+                    rid = int(line[-1])             
+                    print(f"⚪ Confirm release requested: Robot {rid}")
+                    sync_estop_label(rid, "confirm")
+
+                elif line.startswith("CLEAR_R"):       #clear estop
+                    rid = int(line[-1])
+                    print(f"✅ Hardware E-STOP cleared: Robot {rid}")
+                    set_estop(rid, False)
+                    sync_estop_label(rid, "clear")
+                
 
             except Exception as e:
                 print("⚠️ Arduino read error:", e)
@@ -1122,10 +1152,8 @@ while True:
     elif mode == "manual":
         if is_robot_active(2):
             activate_robot(2, False)
-            set_estop(2, True)
         if is_robot_active(3):
             activate_robot(3, False)
-            set_estop(3, True)
 
         robot1.gripper.attach_to_robot(robot1)
         robot1_stick_base()
