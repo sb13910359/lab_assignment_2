@@ -60,6 +60,7 @@ class RobotGUI:
 
                 # --- transition behaviour ---
                 if idx == 0:        # going from normal to active
+                    self.state[f"r{robot_id}_estop_source"] = "human click"
                     if self.set_estop_func:
                         self.set_estop_func(robot_id, True)
                     self.state[f"r{robot_id}_estop"] = True
@@ -71,10 +72,12 @@ class RobotGUI:
                     print(f"⚪ Confirm release for Robot {robot_id}?")
 
                 elif idx == 2:      # confirm to released
+                    self.state[f"r{robot_id}_estop_source"] = None
                     if self.clear_estop_func:
                         self.clear_estop_func(robot_id)
                     self.state[f"r{robot_id}_estop"] = False
                     print(f"✅ E-STOP cleared — Robot {robot_id} ready.")
+                   
                     current_state["idx"] = 0
 
                 # update button label
