@@ -26,19 +26,14 @@ from human import Human
 #import serial reader (for hardware e-stop)
 import serial
 
+
 '''
 ------------------------- COMMON FUNCTIONS -------------------------
 '''
 
 def moving_wall_collision(human, baserobot, robot_id):
-    """
-    持續監測 base_geom 是否撞到 human 的四面隱形牆，
-    撞到時觸發 e_stop=True,並印出警示。
-    Continuously monitor whether base_geom collides with any of the four invisible walls surrounding the human.
-    When a collision occurs, trigger e_stop = True and print a warning message.
-    """
-    
-    HUMAN_SAFE_RADIUS = 0.6
+  
+    safe_radius = 0.6
 
     while True:
         hx, hy, hz = human.T[0, 3], human.T[1, 3], human.T[2, 3]
@@ -55,42 +50,41 @@ def moving_wall_collision(human, baserobot, robot_id):
 
         # 動態牆
         moving_planes = {
-            "front": {"normal": [0, -1, 0], "point": [hx, hy + HUMAN_SAFE_RADIUS, hz],
-                      "location_x": [hx - HUMAN_SAFE_RADIUS, hx + HUMAN_SAFE_RADIUS],
-                      "location_y": [hy + HUMAN_SAFE_RADIUS, hy + HUMAN_SAFE_RADIUS]},
-            "back":  {"normal": [0, 1, 0], "point": [hx, hy - HUMAN_SAFE_RADIUS, hz],
-                      "location_x": [hx - HUMAN_SAFE_RADIUS, hx + HUMAN_SAFE_RADIUS],
-                      "location_y": [hy - HUMAN_SAFE_RADIUS, hy - HUMAN_SAFE_RADIUS]},
-            "right": {"normal": [-1, 0, 0], "point": [hx + HUMAN_SAFE_RADIUS, hy, hz],
-                      "location_x": [hx + HUMAN_SAFE_RADIUS, hx + HUMAN_SAFE_RADIUS],
-                      "location_y": [hy - HUMAN_SAFE_RADIUS, hy + HUMAN_SAFE_RADIUS]},
-            "left":  {"normal": [1, 0, 0], "point": [hx - HUMAN_SAFE_RADIUS, hy, hz],
-                      "location_x": [hx - HUMAN_SAFE_RADIUS, hx - HUMAN_SAFE_RADIUS],
-                      "location_y": [hy - HUMAN_SAFE_RADIUS, hy + HUMAN_SAFE_RADIUS]},
+            "front": {"normal": [0, -1, 0], "point": [hx, hy + safe_radius, hz],
+                      "location_x": [hx - safe_radius, hx + safe_radius],
+                      "location_y": [hy + safe_radius, hy + safe_radius]},
+            "back":  {"normal": [0, 1, 0], "point": [hx, hy - safe_radius, hz],
+                      "location_x": [hx - safe_radius, hx + safe_radius],
+                      "location_y": [hy - safe_radius, hy - safe_radius]},
+            "right": {"normal": [-1, 0, 0], "point": [hx + safe_radius, hy, hz],
+                      "location_x": [hx + safe_radius, hx + safe_radius],
+                      "location_y": [hy - safe_radius, hy + safe_radius]},
+            "left":  {"normal": [1, 0, 0], "point": [hx - safe_radius, hy, hz],
+                      "location_x": [hx - safe_radius, hx - safe_radius],
+                      "location_y": [hy - safe_radius, hy + safe_radius]},
         }
 
         hit = False
         for (p0, p1) in [(p0_x, p1_x), (p0_y, p1_y), (p0_d1, p1_d1), (p0_d2, p1_d2)]:
-            for plane_name, plane in moving_planes.items():
+            for plane in moving_planes.items():
                 n, P = plane["normal"], plane["point"]
                 intersect, check = line_plane_intersection(n, P, p0, p1)
                 if check == 1:
                     xmin, xmax = plane["location_x"]
                     ymin, ymax = plane["location_y"]
                     if xmin <= intersect[0] <= xmax and ymin <= intersect[1] <= ymax:
-                        print(f"🚨 E-STOP triggered! Robot hit human {plane_name} wall.")
+                        print(f"E-STOP triggered")
                         set_estop(robot_id)
                         hit = True
                         break
             if hit:
                 break
-
-        time.sleep(0.05)
+            
+            time.sleep(0.05)
 
 def check_collision(q, robot):
     """
     連桿碰撞檢測
-    Link collision detection
     """
     
     tr = robot.fkine_all(q).A
@@ -104,6 +98,7 @@ def check_collision(q, robot):
         for plane in planes.values():
             n, P = plane["normal"], plane["point"]
             intersect, check = line_plane_intersection(n, P, p0, p1)
+
             if check == 1:
                 xmin, xmax = plane["location_x"]
                 ymin, ymax = plane["location_y"]
@@ -119,19 +114,22 @@ def check_collision(q, robot):
 #robot 1
 def robot1_main_cycle():
     """
-    Handles Robot 1's autonomous patrol and pick-and-place behavior.
-    Runs one iteration of its main logic.
     """
+    #宣告會被此函式讀寫的全域變數 
     global target_pos_world, target_ball, holding, trash_offset_gen3, current_trash_index
+  
 
+    #看現在是auto 還是manual
     mode = get_mode()
-
-    # --- PATROL MODE ---
+ 
+    #巡邏+自動狀態
     if state["r1_patrol"] and mode == "auto":
-        # Rotate in place
+
+        # 先轉180度
         total_angle = np.pi
         angle_step = total_angle / 20
         for _ in range(20):
+            #E-STOP 或 mode不再是 auto，立刻中止
             if is_estop(1) or get_mode() != "auto":
                 return
             robot1.gripper.attach_to_robot(robot1)
@@ -140,38 +138,43 @@ def robot1_main_cycle():
             env.step(0.05)
             time.sleep(0.05)
 
-        # Patrol forward and scan for nearby trash
+        #巡邏5次
         for _ in range(5):
             if is_estop(1) or get_mode() != "auto":
                 return
-
+            
+            #隨機走一小段距離
             distance = np.random.uniform(1.0, 2.0)
             step_size = 0.05
             steps = int(distance / step_size)
-
             for _ in range(steps):
                 if is_estop(1) or get_mode() != "auto":
                     return
                 robot1.gripper.attach_to_robot(robot1)
-                base_step_with_walls(base_geom, step_size)
+                base_step_with_walls(base_geom, step_size) #如果沒撞牆就走一步撞牆就轉彎
                 robot1_stick_base()
                 env.step(0.05)
                 time.sleep(0.05)
 
-                # Detect nearby balls
+                #偵測球
                 for ball in list(balls):
-                    ball_pos_world = ball.T[:3, 3]
+                    ball_pos = ball.T[:3, 3]
                     base_pos = base_geom.T[:3, 3]
-                    dist = np.linalg.norm(ball_pos_world[:2] - base_pos[:2])
+                    #球跟base距離
+                    dist = np.linalg.norm(ball_pos[:2] - base_pos[:2])
                     if dist < 0.5:
+                        #找到球後換state
+                        #目標球位置
+                        target_pos_world = ball_pos
+                        target_ball = ball       
+                        #找到球後換state                
                         state["r1_patrol"] = False
                         state["pick_and_place"] = True
-                        target_pos_world = ball_pos_world
-                        target_ball = ball
-                        print(f"🟡 Ball detected at {target_pos_world}")
+
+                        print(f"Ball detected")
                         return
 
-            # Random turn between patrols
+            #隨機轉彎
             total_angle = np.random.uniform(-np.pi, np.pi)
             angle_step = total_angle / 20
             for _ in range(20):
@@ -183,12 +186,19 @@ def robot1_main_cycle():
                 env.step(0.05)
                 time.sleep(0.05)
 
-    # --- PICK & PLACE SEQUENCE ---
-    elif state["pick_and_place"] and target_pos_world is not None:
+    #抓球
+    elif state["pick_and_place"] :
+
+        #如果沒抓球就執行抓球
         if not holding:
             target = SE3(target_pos_world[0], target_pos_world[1], target_pos_world[2] + 0.08) * SE3.Rx(np.pi)
-            q_pick = robot1.ikine_LM(target, q0=robot1.q).q
+            q_pick = robot1.ikine_LM(target, q0=first_q).q
 
+            #加這兩行感覺比較不會跳
+            robot1_stick_base()
+            robot1.gripper.attach_to_robot(robot1)
+
+            #向下要抓球           
             for q in safe_rrt_path(robot1.q, q_pick):
                 if is_estop(1) or get_mode() != "auto":
                     return
@@ -197,9 +207,10 @@ def robot1_main_cycle():
                 env.step(0.02)
 
             ee_T = robot1.fkine(robot1.q)
+            #記錄垃圾在robot end effector的相對位置
             trash_offset_gen3 = ee_T.inv() * target_ball.T
 
-            # Close gripper
+            #關夾
             for i in range(50):
                 if is_estop(1) or get_mode() != "auto":
                     return
@@ -207,40 +218,41 @@ def robot1_main_cycle():
                 env.step(0.01)
 
             holding = True
+
+            #抬起垃圾
             RMRC_lift()
 
-        # Move to home
-        go_to_home()
-        if is_estop(1) or get_mode() != "auto":
-            return
-
-        # Lower to drop area
-        q_down = robot1.ikine_LM(area.T * SE3.Rx(np.pi) * SE3(0, 0, -0.14), q0=robot1.q).q
+        #回家
+        move_base_towards(base_geom, target_xy=(4, 5.7), step_size=0.05)
+        
+        #加這兩行感覺比較不會跳
+        robot1_stick_base()
+        robot1.gripper.attach_to_robot(robot1)
+        
+        #放置
+        q_down = robot1.ikine_LM(area.T * SE3.Rx(np.pi) * SE3(0, 0, -0.14), q0=first_q).q
         for q in safe_rrt_path(robot1.q, q_down):
             if is_estop(1) or get_mode() != "auto":
                 return
             robot1.q = q
-            if holding and target_ball is not None:
-                target_ball.T = robot1.fkine(robot1.q) * trash_offset_gen3
+            target_ball.T = robot1.fkine(robot1.q) * trash_offset_gen3
             robot1.gripper.attach_to_robot(robot1)
             env.step(0.02)
 
-        # Open gripper
+        #開夾
         for i in range(50):
             robot1.gripper.open(i=i)
             env.step(0.01)
 
         holding = False
-        trash_offset_gen3 = None
-        R_old = target_ball.T[:3, :3]
-        target_ball.T = SE3.Rt(R_old, (area.T * SE3(0, 0, 0.06))[:3, 3])
+        #放球       
+        target_ball.T = target_ball.T.copy()
 
-        # Transfer to UR3
+        #給UR3球
         ur3_ball = target_ball
-        try:
-            current_trash_index = balls.index(target_ball)
-        except ValueError:
-            current_trash_index = None
+
+        current_trash_index = balls.index(target_ball)#紀錄trash 是哪一個 index 方便之後IRB swap trash
+
 
         balls.remove(target_ball)
         area_trash.append(ur3_ball)
@@ -248,17 +260,14 @@ def robot1_main_cycle():
         state["pick_and_place"] = False
         state["r1_patrol"] = True
 
-    # --- IDLE ---
+    # estop 或maunal mode 進入的地方
     else:
         env.step(0.03)
         time.sleep(0.03)
 
-
+#走一步看有沒有撞牆
 def base_step_with_walls(base_geom, step_size=0.05):
-    """
-    讓底座嘗試前進一步並檢查有沒有撞牆
-    Let the base try to move forward and check if it hits a wall
-    """
+
     planes = {
             "wall1": {"normal": [0, 1, 0], "point": [0.1, 0, 0],"location_x": [0, 10], "location_y": [0, 10]},
             "wall2": {"normal": [0, 1, 0], "point": [8.5, 8.5, 0],"location_x": [0, 10], "location_y": [0, 10]},
@@ -266,81 +275,80 @@ def base_step_with_walls(base_geom, step_size=0.05):
         }
 
     T_now = base_geom.T
-    p0 = T_now[0:3, 3]                        # 當前位置    current position
-    p1 = (T_now * SE3(step_size, 0, 0))[0:3, 3]  # 嘗試往前走一步後的位置    the position after attempting to move one step forward.
-
+    #線條
+    p0 = T_now[0:3, 3]                       
+    p1 = (T_now * SE3(step_size, 0, 0))[0:3, 3] 
     for plane in planes.values():
-        n, P = plane["normal"], plane["point"]       # 平面的法向量和通過點    the plane’s normal vector and a point on the plane.
+        n, P = plane["normal"], plane["point"]      
         intersect, check = line_plane_intersection(n, P, p0, p1)
 
-        if check == 1:  # 有交點    if an intersection exists
+        if check == 1: 
             xmin, xmax = plane["location_x"]
             ymin, ymax = plane["location_y"]
 
             # 檢查交點是否在平面定義的矩形區域內
             if xmin <= intersect[0] <= xmax and ymin <= intersect[1] <= ymax:
-                # 如果有撞到牆 → 隨機選轉角避免撞牆
+
+                # 如果有撞到牆 → 隨機選轉
                 angle = np.random.choice([np.pi, -np.pi, np.pi/2, -np.pi/2])
                 turn = angle / 20  # 每次要轉的小角度
                 print("撞到牆 Hitting the wall")
                 for _ in range(20):
                    robot1.gripper.attach_to_robot(robot1) 
                    base_geom.T = base_geom.T * SE3.Rz(turn)
+                   if holding == True:
+                        target_ball.T = robot1.fkine(robot1.q) * trash_offset_gen3
                    robot1_stick_base() 
-                   env.step(0.02)  # 更新環境 (動畫更順)
-                   time.sleep(0.02)  # 控制轉動速度
-                   
-                print("正在轉 turning")
-                return False
+                   env.step(0.02)
+                   time.sleep(0.02)                  
+                print("剛轉彎")              
+                return False  #回報撞牆給move_base_towards()知道
   
 
     # 如果所有平面都沒撞到 → 真的走一步
     base_geom.T = T_now * SE3(step_size, 0, 0)
-    return True
+    return True #回報沒撞給move_base_towards()知道
 
-#robot1 (base_geom)
-#往基座走去  Go to the base
+
+#往基座走去
 def move_base_towards(base_geom, target_xy, step_size=0.05, max_iters=800):
     def _yaw_of(T):
         R = T[:3, :3]
-        return np.arctan2(R[1, 0], R[0, 0])
-        #機器人當前在 XY 平面的朝向 (yaw)
+        return np.arctan2(R[1, 0], R[0, 0])  # 算出目前robot在 XY 平面的朝向角度
+
     it = 0
     while it < max_iters:
         if is_estop(1) or get_mode() == "manual":
             return
         it += 1
+        
+        #目前base位置
         p = base_geom.T[0:3, 3]
         dx, dy = target_xy[0] - p[0], target_xy[1] - p[1]
-        #計算當前位置到目標的距離，如果比一步還短，就當作已經到達，停止迴圈。
-        if np.hypot(dx, dy) < step_size:
+        #計算current T到目標T的距離，如果比一步還短，就當作已經到達，停止迴圈。
+        if np.hypot(dx, dy) < step_size: # np.hypot(dx, dy)=距離很像 lingnorm
             break
-        #(dx, dy) 計算出「理想的朝向角度」
-        desired_yaw = np.arctan2(dy, dx)
-        #底座目前的朝向角
-        cur_yaw = _yaw_of(base_geom.T)
-        #這段就是再算從cur_yaw轉到 desired_yaw最近需要轉的度數
-        yaw_err = (desired_yaw - cur_yaw + np.pi) % (2*np.pi) - np.pi
-        #要轉的角度差 yaw_err 限制在 ±yaw_step 之內，確保機器人每次只會小幅度轉向
-        turn = np.clip(yaw_err, -np.deg2rad(15), np.deg2rad(15))
+
+        desired_yaw = np.arctan2(dy, dx)#也就是機器人如果要直直走向目標，頭應該朝的方向
+        cur_yaw = _yaw_of(base_geom.T) #底座目前的朝向角
+ 
+        yaw_err = (desired_yaw - cur_yaw + np.pi) % (2*np.pi) - np.pi #把誤差轉成 -pi 到 pi 之間 #就像轉350ep 轉10 度最後朝向一樣
+        turn = np.clip(yaw_err, -np.deg2rad(15), np.deg2rad(15)) #限制 value 的數值必須介於 min 和 max 之間
         base_geom.T = base_geom.T * SE3.Rz(turn)
-        #不是只有一次turn 因為是在while loop所以是轉一點走一步轉一點
-        moved = base_step_with_walls(base_geom, step_size)
-        #嘗試往前走一步，如果成功走了，moved=True；如果被牆擋住，moved=False
+
+        moved = base_step_with_walls(base_geom, step_size) #嘗試往前走一步，如果成功走了，moved=True；如果被牆擋住，moved=False
 
         #「如果前面有牆擋住走不動，那就往目標方向的那一邊小轉 15° 再試。
-        if not moved:
-            base_geom.T = base_geom.T * SE3.Rz(np.sign(yaw_err) * np.deg2rad(15))
+        #if not moved:
+        #    base_geom.T = base_geom.T * SE3.Rz(np.sign(yaw_err) * np.deg2rad(15))
 
-        if holding ==True:
-            target_ball.T = robot1.fkine(robot1.q) * trash_offset_gen3
-
+        target_ball.T = robot1.fkine(robot1.q) * trash_offset_gen3
         robot1.gripper.attach_to_robot(robot1)
         robot1_stick_base()
         env.step(0.03)
         time.sleep(0.03)
 
-#robot1
+
 def safe_rrt_path(q1, q2, max_iters=300):
     robot1.q = q1
     env.step()
@@ -404,49 +412,51 @@ def safe_rrt_path(q1, q2, max_iters=300):
             print(f"死循環") 
             return rtb.jtraj(q1, q2, 50).q
         
-
+    print(f"找不到")
     return rtb.jtraj(q1, q2, 50).q  
     #如果嘗試了 max_iters 次還沒找到路徑 → 直接回傳直線插值（最後手段）
 
-#robot1
+
 def robot1_stick_base():
     robot1.base = base_geom.T * SE3(0, 0, 0.12)
 
-#robot1
+
 def RMRC_lift():
     steps = 60
     delta_t = 0.02
-    lift_h = 0.50#抬升的總高度 = 0.5 公尺
+    lift_h = 0.50 #抬升0.5m
 
     T0 = robot1.fkine(robot1.q).A
+    #現在Z
     z0 = T0[2, 3]
+    #目標Z
     z1 = z0 + lift_h
 
     #產生 z0-z1的平滑中間點
     s = trapezoidal(0, 1, steps).q
     z = (1 - s) * z0 + s * z1
+    
     #建立一個矩陣來存放 每一步的關節角度
     q_matrix = np.zeros((steps, robot1.n))
     #把目前的機械臂關節角度存到 q_matrix 的第 0 行
     q_matrix[0, :] = robot1.q.copy()
-
+    
+    #計算q矩陣
     for i in range(steps - 1):
-        if is_estop(1):  
-            return
-        #Z速
-        zdot = (z[i + 1] - z[i]) / delta_t
-        #x速
-        xdot = np.array([0.0, 0.0, zdot])
-        #當前關節角度下的 Jacobian 矩陣
-        J = robot1.jacob0(q_matrix[i, :])
+        zdot = (z[i + 1] - z[i]) / delta_t#Z速
+
+        xdot = np.array([0.0, 0.0, zdot])#x速 (只往上動 所以x,y速都是0)
+
+        J = robot1.jacob0(q_matrix[i, :])#當前關節角度下的 Jacobian 矩陣
         Jv = J[:3, :]
-        #計算所需關節速度
-        qdot = np.linalg.pinv(Jv) @ xdot
-        #下一個關節= 這個關節加上q速(q變化量)
-        q_matrix[i + 1, :] = q_matrix[i, :] + delta_t * qdot
+
+        qdot = np.linalg.pinv(Jv) @ xdot#計算所需關節速度
+
+        q_matrix[i + 1, :] = q_matrix[i, :] + delta_t * qdot#下一個關節= 這個關節加上q速(q變化量)
+
     #走過q
     for q in q_matrix:
-        if is_estop(1):   
+        if is_estop(1) or get_mode() != "auto":
             return
         robot1.q = q
         if holding == True:
@@ -454,15 +464,6 @@ def RMRC_lift():
         robot1.gripper.attach_to_robot(robot1)
         env.step( 0.02)
         time.sleep( 0.02)
-
-#robot1
-def go_to_home():
-   
-        move_base_towards(base_geom, target_xy=(4, 5.7), step_size=0.05)
-        target_ball.T = robot1.fkine(robot1.q) * trash_offset_gen3
-        robot1.gripper.attach_to_robot(robot1)
-        env.step(0.03)
-        time.sleep(0.03)
 
 '''
 ------------------------- ROBOT 2 FUNCTIONS -------------------------
@@ -856,7 +857,7 @@ robot3_base = Cylinder(radius=0.25, length=0.6,
 env.add(base_geom)
 env.add(robot2_base)
 env.add(robot3_base)
-
+first_q = robot1.q.copy()
 robot2.q = np.array([np.pi/4 - 0.15, -np.pi/2 + 0.15, - 0.3, -np.pi/2 - 0.15, np.pi/2, 0])
 robot3.q = np.array([-5.734102970222921e-09, -0.12308620608416643, -0.002540056574218852,
                      9.292429048457507e-10, 1.6964225904475079, -1.570796331431561])
@@ -1178,6 +1179,7 @@ while True:
 
     # --- ROBOT 1 MAIN LOOP ---
     robot1_main_cycle()
+
 
 
 
