@@ -24,7 +24,7 @@ from robot_gui import RobotGUI
 from human import Human
 
 #import serial reader (for hardware e-stop)
-import serial
+#import serial
 
 
 '''
@@ -78,9 +78,12 @@ def moving_wall_collision(human, baserobot, robot_id):
                         hit = True
                         break
             if hit:
-                break
-            
-            time.sleep(0.05)
+                break #不用繼續檢查下去直接break
+        if not hit and is_estop(robot_id):
+            if state.get(f"r{robot_id}_estop_source") != "human click":
+                set_estop(robot_id, False)
+
+        time.sleep(0.05)
 
 def check_collision(q, robot):
     """
@@ -110,7 +113,6 @@ def check_collision(q, robot):
 '''
 ------------------------- ROBOT 1 FUNCTIONS -------------------------
 '''
-
 #robot 1
 def robot1_main_cycle():
     """
@@ -170,7 +172,7 @@ def robot1_main_cycle():
                         #找到球後換state                
                         state["r1_patrol"] = False
                         state["pick_and_place"] = True
-
+                        state["r1_stage"] = "move_to_pick"   # ### 新增：設定起始 Stage
                         print(f"Ball detected")
                         return
 
@@ -186,90 +188,150 @@ def robot1_main_cycle():
                 env.step(0.05)
                 time.sleep(0.05)
 
-    #抓球
-    elif state["pick_and_place"] :
+    #抓球 / PnP 狀態機（可隨時 E-STOP，解除後從上一段繼續）
+    elif state["pick_and_place"]:
 
-        #如果沒抓球就執行抓球
-        if not holding:
-            target = SE3(target_pos_world[0], target_pos_world[1], target_pos_world[2] + 0.08) * SE3.Rx(np.pi)
-            q_pick = robot1.ikine_LM(target, q0=first_q).q
+        # ① 前往撿球
+        if state["r1_stage"] == "move_to_pick":
+            #如果沒抓球就執行抓球
+            if not holding:
+                target = SE3(target_pos_world[0], target_pos_world[1], target_pos_world[2] + 0.08) * SE3.Rx(np.pi)
+                q_pick = robot1.ikine_LM(target, q0=first_q).q
+
+                #加這兩行感覺比較不會跳
+                robot1_stick_base()
+                robot1.gripper.attach_to_robot(robot1)
+
+                #向下要抓球
+                for q in safe_rrt_path(robot1.q, q_pick):
+                    if is_estop(1) or get_mode() != "auto":
+                        return
+                    robot1.q = q
+                    robot1.gripper.attach_to_robot(robot1)
+                    env.step(0.02)
+
+                ee_T = robot1.fkine(robot1.q)
+                #記錄垃圾在robot end effector的相對位置
+                trash_offset_gen3 = ee_T.inv() * target_ball.T
+
+                #關夾
+                for i in range(50):
+                    if is_estop(1) or get_mode() != "auto":
+                        return
+                    robot1.gripper.close(i=i)
+                    env.step(0.01)
+
+                holding = True
+                state["r1_stage"] = "lift"   # ### 新增：下一段
+            else:
+                # 若已經 holding，保險切到下一段
+                state["r1_stage"] = "lift"
+
+            return  # ### 新增：每段只做一小步就返回
+
+        # ② 抬起垃圾
+        elif state["r1_stage"] == "lift":
+            #抬起垃圾
+            RMRC_lift()
+            state["r1_stage"] = "go_home"   # ### 新增：下一段
+            return  # ### 新增：切段 return
+
+        # ③ 回家（每次只走一小步，隨時可 E-STOP / Resume）
+        elif state["r1_stage"] == "go_home":
+            if is_estop(1) or get_mode() != "auto":
+                   return
+            # ### 新增：一步式回家（G1：由 main_cycle 控制細步前進）
+            target_xy = (4, 5.7)
+            step_size = 0.05
+
+            #目前base位置
+            p = base_geom.T[0:3, 3]
+            dx, dy = target_xy[0] - p[0], target_xy[1] - p[1]
+
+            #到家了 → 切到 place
+            if np.hypot(dx, dy) < step_size:
+                #加這兩行感覺比較不會跳
+                robot1_stick_base()
+                robot1.gripper.attach_to_robot(robot1)
+                state["r1_stage"] = "place"
+                return
+
+            # 方向微調（與 move_base_towards 相同邏輯，但只走一步）
+            def _yaw_of(T):
+                R = T[:3, :3]
+                return np.arctan2(R[1, 0], R[0, 0])
+
+            desired_yaw = np.arctan2(dy, dx)       # 目標朝向
+            cur_yaw     = _yaw_of(base_geom.T)     # 目前朝向
+            yaw_err     = (desired_yaw - cur_yaw + np.pi) % (2*np.pi) - np.pi
+            turn        = np.clip(yaw_err, -np.deg2rad(15), np.deg2rad(15))
+            base_geom.T = base_geom.T * SE3.Rz(turn)
+
+            # 嘗試往前走一步（撞牆就會自轉避開）
+            base_step_with_walls(base_geom, step_size)
+
+            #如果手上有球，更新球跟著末端走
+            if holding:
+                target_ball.T = robot1.fkine(robot1.q) * trash_offset_gen3
 
             #加這兩行感覺比較不會跳
-            robot1_stick_base()
             robot1.gripper.attach_to_robot(robot1)
+            robot1_stick_base()
+            env.step(0.03)
+            time.sleep(0.03)
 
-            #向下要抓球           
-            for q in safe_rrt_path(robot1.q, q_pick):
+            return  # ### 新增：只走一小步就 return，讓下一輪再走下一步
+
+        # ④ 放置垃圾
+        elif state["r1_stage"] == "place":
+            #放置
+            q_down = robot1.ikine_LM(area.T * SE3.Rx(np.pi) * SE3(0, 0, -0.14), q0=first_q).q
+            for q in safe_rrt_path(robot1.q, q_down):
                 if is_estop(1) or get_mode() != "auto":
                     return
                 robot1.q = q
+                target_ball.T = robot1.fkine(robot1.q) * trash_offset_gen3
                 robot1.gripper.attach_to_robot(robot1)
                 env.step(0.02)
 
-            ee_T = robot1.fkine(robot1.q)
-            #記錄垃圾在robot end effector的相對位置
-            trash_offset_gen3 = ee_T.inv() * target_ball.T
-
-            #關夾
+            #開夾
             for i in range(50):
                 if is_estop(1) or get_mode() != "auto":
                     return
-                robot1.gripper.close(i=i)
+                robot1.gripper.open(i=i)
                 env.step(0.01)
 
-            holding = True
+            holding = False
+            #放球       
+            target_ball.T = target_ball.T.copy()
 
-            #抬起垃圾
+            #給UR3球
+            ur3_ball = target_ball
+
+            current_trash_index = balls.index(target_ball) #紀錄trash 是哪一個 index 方便之後IRB swap trash
+
+            balls.remove(target_ball)
+            area_trash.append(ur3_ball)
+
             RMRC_lift()
 
-        #回家
-        move_base_towards(base_geom, target_xy=(4, 5.7), step_size=0.05)
-        
-        #加這兩行感覺比較不會跳
-        robot1_stick_base()
-        robot1.gripper.attach_to_robot(robot1)
-        
-        #放置
-        q_down = robot1.ikine_LM(area.T * SE3.Rx(np.pi) * SE3(0, 0, -0.14), q0=first_q).q
-        for q in safe_rrt_path(robot1.q, q_down):
-            if is_estop(1) or get_mode() != "auto":
-                return
-            robot1.q = q
-            target_ball.T = robot1.fkine(robot1.q) * trash_offset_gen3
-            robot1.gripper.attach_to_robot(robot1)
-            env.step(0.02)
-
-        #開夾
-        for i in range(50):
-            robot1.gripper.open(i=i)
-            env.step(0.01)
-
-        holding = False
-        #放球       
-        target_ball.T = target_ball.T.copy()
-
-        #給UR3球
-        ur3_ball = target_ball
-
-        current_trash_index = balls.index(target_ball)#紀錄trash 是哪一個 index 方便之後IRB swap trash
-
-
-        balls.remove(target_ball)
-        area_trash.append(ur3_ball)
-        RMRC_lift()
-        state["pick_and_place"] = False
-        state["r1_patrol"] = True
+            # ### 新增：收尾 & 回到巡邏
+            state["pick_and_place"] = False
+            state["r1_patrol"] = True
+            state["r1_stage"] = None
+            return  # ### 新增：這段完成後返回
 
     # estop 或maunal mode 進入的地方
     else:
         env.step(0.03)
         time.sleep(0.03)
 
+
 #走一步看有沒有撞牆
 def base_step_with_walls(base_geom, step_size=0.05):
 
     planes = {
-            "wall1": {"normal": [0, 1, 0], "point": [0.1, 0, 0],"location_x": [0, 10], "location_y": [0, 10]},
+            "wall1": {"normal": [0, 1, 0], "point": [1, 1, 0],"location_x": [0, 10], "location_y": [0, 10]},
             "wall2": {"normal": [0, 1, 0], "point": [8.5, 8.5, 0],"location_x": [0, 10], "location_y": [0, 10]},
             "wall3": {"normal": [1, 0, 0], "point": [4, 0, 0],"location_x": [0, 10], "location_y": [0, 10]}
         }
@@ -855,10 +917,18 @@ robot3.base = robot3.base * area_place.T * SE3.Ty(-0.37) * SE3.Rz(np.pi/2)
 robot3_base = Cylinder(radius=0.25, length=0.6,
                        color=(0.20, 0.12, 0.06),
                        pose=robot3.base * SE3(0, 0, -0.31)) 
+alarm_safe = Cylinder(radius=0.25, length=0.6,
+                       color=(0,0.9, 0.06),
+                       pose=SE3(2, 2,- 1)* SE3.Rx(np.pi/2) )
+alarm_danger = Cylinder(radius=0.25, length=0.6,
+                       color=(1, 0.02, 0.01),
+                       pose=SE3(2, 2, -1)* SE3.Rx(np.pi/2) )
 
 env.add(base_geom)
 env.add(robot2_base)
 env.add(robot3_base)
+env.add(alarm_safe)
+env.add(alarm_danger)
 
 first_q = robot1.q.copy()
 robot2.q = np.array([np.pi/4 - 0.15, -np.pi/2 + 0.15, - 0.3, -np.pi/2 - 0.15, np.pi/2, 0])
@@ -954,7 +1024,13 @@ state = {
     "pick_and_place": False,
     "target_pos_world": None,
     "target_ball": None,
-    "e_stop": False
+    "e_stop": False,
+    # E-STOP 來源 (manual / collision / None)
+    "r1_estop_source": None,
+    "r2_estop_source": None,
+    "r3_estop_source": None,
+
+    "r1_stage": None,
 }
 
 # 狀態 state
@@ -971,7 +1047,6 @@ trash_offset_ur3 = None
 trash_offset_gen3 = None
 
 r2_thread = None
-
 
 # E-STOP SYSTEM 
 estop_r1 = threading.Event()       # Robot 1 (Gen3Lite)
@@ -990,59 +1065,74 @@ gui = RobotGUI(
     state_dict=state,
     set_estop_func=lambda rid=None, val=True: set_estop(rid, val),
     clear_estop_func=lambda rid=None: set_estop(rid, False)
+    
 )
 
+
+#硬體或GUI是否觸發estop 是就回傳true
 def is_estop(robot_id=None):
-    """Check E-STOP for a given robot or global."""
     if robot_id == 1:
         return estop_r1.is_set() or state.get("r1_estop", False)
+        # hardware                  GUI
     elif robot_id == 2:
         return estop_r2.is_set() or state.get("r2_estop", False)
     elif robot_id == 3:
         return estop_r3.is_set() or state.get("r3_estop", False)
     return False
 
+
+
+#它負責開啟或解除某一台機器人的 E-STOP，並同步更新 Event、state 以及 GUI
 def set_estop(robot_id=None, value=True):
-    """Set or clear E-STOP for a specific robot"""
+
     if robot_id is None:  
         print("Please select which robot to target.")
         return
 
     event = {1: estop_r1, 2: estop_r2, 3: estop_r3}.get(robot_id)
+
     if event is None:
         return
     
+    #啟動 E-STOP
     if value:
-        event.set()
+        event.set()# robot 停止（用 threading.Event 封鎖 robot 的動作 thread）
         state[f"r{robot_id}_estop"] = True     # sync GUI state
         state["e_stop"] = True
-        sync_estop_label(robot_id, "active")
-        print(f"🚨 E-STOP ON — Robot {robot_id} halted.")
+        alarm_safe.T = SE3(4, 4, -1)
+        alarm_danger.T = SE3(4, 4, 1)
+        sync_estop_label(robot_id, "active")#更新 GUI 按鈕文字
+        print(f" E-STOP ON — Robot {robot_id} halted.")
+
+    #解除 E-STOP    
     else:
         event.clear()
         state[f"r{robot_id}_estop"] = False    # sync GUI state
         state["e_stop"] = False
         sync_estop_label(robot_id, "clear")
-        set_mode("manual")
-        print(f"✅ E-STOP CLEARED — Robot {robot_id} ready.")
- 
+        alarm_safe.T = SE3(4, 4, 1)
+        alarm_danger.T = SE3(4, 4, -1)
+        #set_mode("manual")
+        print(f" E-STOP CLEARED — Robot {robot_id} ready.")
+
+#回傳auto 或manual
 def get_mode():
-    """Return current robot mode (auto/manual/etc.)."""
     return state["mode"]
 
+#設定mode 是auto 或manual
 def set_mode(value: str):
     """Change robot mode and keep GUI in sync."""
     state["mode"] = value
-
+#寫入 state
 def activate_robot(robot_id, active=True):
     """Activate or deactivate robot based on current mode."""
     if robot_id == 2:
+        #把state["r2_active"]設成active
         state["r2_active"] = active
-        print(f"{'🟢' if active else '🔴'} Robot 2 {'activated' if active else 'paused'}")
     elif robot_id == 3:
         state["r3_active"] = active
-        print(f"{'🟢' if active else '🔴'} Robot 3 {'activated' if active else 'paused'}")
 
+#讀取state
 def is_robot_active(robot_id):
     """Return whether a robot is currently active."""
     if robot_id == 2:
@@ -1057,14 +1147,17 @@ def keep_swift_alive(env):
         env.step(0.05)
         time.sleep(0.05)
 
+#更新按鈕上面的文字 
 def sync_estop_label(robot_id, state_label="active"):
     """Update GUI E-STOP button label & colour when triggered externally."""
+    #建一個 對照表 (dictionary)
     btn_map = {1: gui.estop_btn_r1, 2: gui.estop_btn_r2, 3: gui.estop_btn_r3}
     if robot_id not in btn_map:
         return
     btn = btn_map[robot_id]
 
     if state_label == "active":
+        #改按鈕文字
         btn.desc = f"🚨 E-STOP ACTIVE (Robot {robot_id})"
 
     elif state_label == "confirm":
@@ -1073,7 +1166,7 @@ def sync_estop_label(robot_id, state_label="active"):
     elif state_label == "clear":
         btn.desc = f"E-STOP (Robot {robot_id})"
 
-
+#監控irb 是否觸發啟動壓縮流程
 def crusher_watcher():
     global crusher_trigger, crusher_busy, current_trash_index
     while True:
@@ -1098,6 +1191,7 @@ def crusher_watcher():
         if is_estop(3) and crusher_busy:
             print("IRB1200 E-STOP while busy")
         time.sleep(0.1)
+
 
 # Arduino E-STOP
 def hardware_estop_listener():
@@ -1143,7 +1237,8 @@ threading.Thread(target=moving_wall_collision, args=(human_obj.human,base_geom, 
 threading.Thread(target=moving_wall_collision, args=(human_obj.human,robot3_base, 3), daemon=True).start()
 threading.Thread(target=moving_wall_collision, args=(human_obj.human,robot2_base, 2), daemon=True).start()
 threading.Thread(target=keep_swift_alive, args=(env,), daemon=True).start()
-threading.Thread(target=hardware_estop_listener, daemon=True).start()
+#threading.Thread(target=hardware_estop_listener, daemon=True).start()
+
 
 '''
 ------------------------- MAIN LOOP 主迴圈 -------------------------
@@ -1181,7 +1276,6 @@ while True:
 
     # --- ROBOT 1 MAIN LOOP ---
     robot1_main_cycle()
-
 
 
 
