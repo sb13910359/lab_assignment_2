@@ -72,7 +72,7 @@ class IRB1200(DHRobot3D):
         qlim = [
             [-170 * d2r, 170 * d2r],
             [-100 * d2r, 80 * d2r],
-            [-130 * d2r, 35  * d2r],
+            [-150 * d2r, 70  * d2r],
             [-270 * d2r, 270 * d2r],
             [-130 * d2r, 130 * d2r],
             [-360 * d2r, 360 * d2r]
@@ -129,7 +129,7 @@ class IRB1200EE:
     # --------------------------------------------------------
     def attach_to_robot(self, robot):
         """
-        Update transforms of crusher parts based on robot flange pose.
+        Update transforms of crusher parts based on robot pose.
         Faces downward (-Z) with slight rotation offset to align visually.
         """
         T = robot.fkine(robot.q)
