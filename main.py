@@ -490,7 +490,7 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
         x[2, i] = (1 - s[i]) * T_start.t[2] + s[i] * T_goal.t[2]
 
         if z_arc == True:
-            x[2, i] += 0.3 * np.sin(np.pi * s[i])        #option for upward arc 
+            x[2, i] += 0.18 * np.sin(np.pi * s[i])        #option for upward arc 
     
         # Keep gripper vertical
         #theta[:, i] = [np.pi, 0, 0]
@@ -582,7 +582,7 @@ def ur3_pick_and_place():
 
     T_rest  = robot2.fkine(q_rest)
     T_pick  = robot2.fkine(q_pick) * SE3(0, 0, -0.06)
-    T_place = robot2.fkine(q_place)
+    T_place = robot2.fkine(q_place) * SE3(0, 0, -0.1)
     T_box   = robot2.fkine(q_box)
 
     while len(area_trash) > 0:
@@ -629,7 +629,7 @@ def ur3_pick_and_place():
             robot2.gripper.open(i=i)        #open gripper
             env.step(0.01)
 
-        ur3_ball.T = area_place.T * SE3(0,0,0.03)
+        ur3_ball.T = ur3_ball.T.copy()
 
         rmrc_move_ur3(robot2, env, T_place, T_rest)       # traj3
 
@@ -641,7 +641,7 @@ def ur3_pick_and_place():
         while crusher_busy or is_estop(3):         # UR3 waiting for robot3/IRB1200 to finish before enter its space
             time.sleep(0.2)
 
-        rmrc_move_ur3(robot2, env, T_rest, T_place)       # traj4
+        rmrc_move_ur3(robot2, env, T_rest, (T_place * SE3(0,0,0.1)) )       # traj4
 
         for i in range(50):
             robot2.gripper.close(i=i)       #close gripper
@@ -650,7 +650,7 @@ def ur3_pick_and_place():
         while crusher_busy or is_estop(3):
             time.sleep(0.2)
 
-        rmrc_move_ur3(robot2, env, T_place, T_box, follow_object=True, obj=crushed, z_arc=True)        # traj5
+        rmrc_move_ur3(robot2, env, (T_place * SE3(0,0,0.1)), T_box, follow_object=True, obj=crushed, z_arc=True)        # traj5
 
         for i in range(50):
             robot2.gripper.open(i=i)        #open gripper
@@ -661,6 +661,8 @@ def ur3_pick_and_place():
         rmrc_move_ur3(robot2, env, T_box, T_rest)         # traj6
 
         area_trash.remove(ur3_ball)        # finish dealing with trash from ur3
+
+
 
 
 '''
@@ -676,18 +678,18 @@ def swap_to_crushed_object():
 
     # Safety check: nothing to crush yet
     if current_ur3_object is None or current_trash_index is None:
-        print("⚠️ No current UR3 object to crush.")
+        print("No current UR3 object to crush.")
         return None
 
     # Move the original object below the floor
-    current_ur3_object.T = SE3(current_ur3_object.T) * SE3(0, 0, -2.0)
+    current_ur3_object.T = SE3(current_ur3_object.T) * SE3(0, -2.0, 0)
 
     # Bring up its corresponding squashed object
     crushed = squashed_trash_list[current_trash_index]
     crushed.T = area_place.T * SE3.Tz(0.01)
     env.step()
     print(f"🟣 Crushed object #{current_trash_index} swapped in.")
-    return crushed   # ✅ return the reference
+    return crushed   # return the reference
 
 # robot3
 def crusher_rmrc_trajectory():
@@ -695,6 +697,18 @@ def crusher_rmrc_trajectory():
     if get_mode() != "auto" or not is_robot_active(3):   # (for robot3)
         print("🔴 IRB1200 paused (manual mode or inactive).")
         return
+    
+    q_current = robot3.q.copy()
+
+    q_rest = np.array([-2.729201677813205e-11, 0.07552781760311615, -0.19380546091465126,
+                       8.621482220609894e-11, 1.6890746391256057, -1.5707963266042881])
+                     
+    rest_traj = rtb.jtraj(q_current, q_rest, 10).q      #reset to q_rest if moved around
+    for q in rest_traj:
+        robot3.q = q
+        robot3.ee.attach_to_robot(robot3)
+        env.step(0.02)
+        time.sleep(0.02)
 
     steps = 35
     delta_t = 0.02
@@ -705,8 +719,8 @@ def crusher_rmrc_trajectory():
     # Define start & end poses (vertical crush motion)
     R_down_start = SO3.Rx(np.pi)                 # Facing -Z
     R_down_end   = SO3.Rx(np.pi)                 # Same orientation
-    T_start = SE3(area_place.T) * SE3(0, 0, 0.75) * SE3.Rx(np.pi)
-    T_end   = SE3(area_place.T) * SE3(0, 0, 0.17) * SE3.Rx(np.pi)
+    T_start = SE3(area_place.T) * SE3(0, 0, 0.77) * SE3.Rx(np.pi)
+    T_end   = SE3(area_place.T) * SE3(0, 0, 0.21) * SE3.Rx(np.pi)
 
 
     # Generate smooth trapezoidal position trajectory
@@ -729,18 +743,6 @@ def crusher_rmrc_trajectory():
     ).q
 
     print("Starting crusher RMRC sequence...")
-
-    q_current = robot3.q.copy()
-
-    q_rest = np.array([-5.734102970222921e-09, -0.12308620608416643, -0.002540056574218852,
-                     9.292429048457507e-10, 1.6964225904475079, -1.570796331431561])
-
-    rest_traj = rtb.jtraj(q_current, q_rest, 10).q      #reset to q_rest if moved around
-    for q in rest_traj:
-        robot3.q = q
-        robot3.ee.attach_to_robot(robot3)
-        env.step(0.02)
-        time.sleep(0.02)
 
     # RMRC Loop (downward motion)
     for i in range(steps - 1):
@@ -849,7 +851,7 @@ robot2_base = Cylinder(radius=0.1, length=0.6,
 robot2.base = robot2_base.T * SE3(0, 0, 0.05)
 
 #robot3 base
-robot3.base = robot3.base * area_place.T * SE3.Ty(-0.3) * SE3.Rz(np.pi/2) 
+robot3.base = robot3.base * area_place.T * SE3.Ty(-0.37) * SE3.Rz(np.pi/2) 
 robot3_base = Cylinder(radius=0.25, length=0.6,
                        color=(0.20, 0.12, 0.06),
                        pose=robot3.base * SE3(0, 0, -0.31)) 
@@ -857,10 +859,10 @@ robot3_base = Cylinder(radius=0.25, length=0.6,
 env.add(base_geom)
 env.add(robot2_base)
 env.add(robot3_base)
+
 first_q = robot1.q.copy()
 robot2.q = np.array([np.pi/4 - 0.15, -np.pi/2 + 0.15, - 0.3, -np.pi/2 - 0.15, np.pi/2, 0])
-robot3.q = np.array([-5.734102970222921e-09, -0.12308620608416643, -0.002540056574218852,
-                     9.292429048457507e-10, 1.6964225904475079, -1.570796331431561])
+robot3.q = np.array([0, 0, - 0.15, 0, np.pi/2, -np.pi/2])
 
 robot1.add_to_env(env)
 robot2.add_to_env(env) 
@@ -1179,6 +1181,7 @@ while True:
 
     # --- ROBOT 1 MAIN LOOP ---
     robot1_main_cycle()
+
 
 
 
