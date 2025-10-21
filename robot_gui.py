@@ -15,14 +15,8 @@ class RobotGUI:
                  gripper_stick_arm2, update_robot3_ee,
                  state_dict,
                  set_estop_func=None, clear_estop_func=None):
-        """
-        env: swift.Swift() environment
-        robot1/2/3: robot instances
-        gripper_stick_arm, robot1_stick_base, gripper_stick_arm2: update callbacks
-        robot3_ee_ref: reference to robot3_ee geometry object
-        state_dict: dictionary of shared states (mode, e_stop, resume_ready, etc.)
-        """
-        # --- Link callbacks for E-STOP ---
+
+        # Link callbacks for E-STOP
         self.set_estop_func = set_estop_func
         self.clear_estop_func = clear_estop_func
 
@@ -39,11 +33,7 @@ class RobotGUI:
         # Default active robot
         self.active_robot = self.robot1
 
-        # GUI buttons
-        self.estop_btn = None
-        self.clear_btn = None
-
-        # Build GUI elements (E-STOP comes first)
+        # Build GUI elements 
         self._build_estop_buttons()
         self._build_mode_buttons()
         self._build_robot_select_buttons()
@@ -51,9 +41,8 @@ class RobotGUI:
                      
         print("Press 🟡 Manual Mode to pause automation, then use Control Robot 1/2/3 + sliders to move each robot.")
 
-    # ---------------------------------------------------
+
     #  E-STOP SYSTEM  (per-robot)
-    # ---------------------------------------------------
     def _build_estop_buttons(self):
 
         def make_estop_button(robot_id):
@@ -70,25 +59,25 @@ class RobotGUI:
                 idx = current_state["idx"]
 
                 # --- transition behaviour ---
-                if idx == 0:        # going from normal → active
+                if idx == 0:        # going from normal to active
                     if self.set_estop_func:
                         self.set_estop_func(robot_id, True)
                     self.state[f"r{robot_id}_estop"] = True
                     print(f"🚨 E-STOP ENGAGED — Robot {robot_id} halted.")
                     current_state["idx"] = 1
 
-                elif idx == 1:      # active → confirm release
+                elif idx == 1:      # active to confirm release
                     current_state["idx"] = 2
                     print(f"⚪ Confirm release for Robot {robot_id}?")
 
-                elif idx == 2:      # confirm → released
+                elif idx == 2:      # confirm to released
                     if self.clear_estop_func:
                         self.clear_estop_func(robot_id)
                     self.state[f"r{robot_id}_estop"] = False
                     print(f"✅ E-STOP cleared — Robot {robot_id} ready.")
                     current_state["idx"] = 0
 
-                # --- update button label/colour --- 
+                # update button label
                 btn.desc = states[current_state["idx"]]
 
             # create button
@@ -101,9 +90,8 @@ class RobotGUI:
         self.estop_btn_r2 = make_estop_button(2)
         self.estop_btn_r3 = make_estop_button(3)
 
-    # ---------------------------------------------------
+
     # MODE BUTTON
-    # ---------------------------------------------------
 
     def _build_mode_buttons(self):
         """Create one toggle button that switches between Manual and Auto mode."""
@@ -143,16 +131,12 @@ class RobotGUI:
         mode_btn = swift.Button(desc=desc, cb=toggle_mode)
         self.env.add(mode_btn)
 
-        # Store for reference (optional)
+        # Store for reference 
         self.mode_btn = mode_btn
 
 
 
-
-
-    # ---------------------------------------------------
-    # ROBOT SELECTION BUTTONS (with Display)
-    # ---------------------------------------------------
+    # ROBOT SELECTION BUTTONS 
     def _build_robot_select_buttons(self):
         """Single button that cycles through Robot 1–3 each time it's clicked."""
 
@@ -164,7 +148,7 @@ class RobotGUI:
         self.robot_cycle_index = 0
         self.active_robot, name = robots[self.robot_cycle_index]
 
-        # --- Create one button ---
+        # Create one button
         self.selected_robot_display = swift.Button(
             desc=f"Selected: {name}",
             cb=lambda _: cycle_robot()    # click cycles robot
@@ -189,9 +173,7 @@ class RobotGUI:
         return None
 
 
-    # ---------------------------------------------------
     # SLIDERS
-    # ---------------------------------------------------
     def _build_sliders(self):
         def slider_callback(value_deg, joint_index):
             if self.state["mode"] != "manual" or self.state["e_stop"]:
@@ -199,7 +181,7 @@ class RobotGUI:
             
             q_new = np.deg2rad(float(value_deg))
 
-            #joint limits
+            #check joint limits
             qmin, qmax = self.active_robot.qlim[0, joint_index], self.active_robot.qlim[1, joint_index]
             if q_new < qmin:
                 q_new = qmin
@@ -209,7 +191,8 @@ class RobotGUI:
             q = self.active_robot.q.copy()
             q[joint_index] = q_new
             self.active_robot.q = q
-
+            
+            # update grippers / ee
             if self.active_robot == self.robot1:
                 self.gripper_stick_arm()
                 self.robot1_stick_base()
@@ -230,4 +213,5 @@ class RobotGUI:
             )
             self.env.add(s)
             
+
 
