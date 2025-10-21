@@ -472,19 +472,15 @@ def go_to_home():
 def rmrc_move_ur3(robot, env, T_start, T_goal,
               steps=80, delta_t=0.015, epsilon=0.05, lambda_max=0.1, 
               follow_object=False, obj=None, obj_offset=None, z_arc=False):
-
-    # Helper: Damped Least Squares inverse
-    def damped_ls(J, lam):
-        return np.linalg.inv(J.T @ J + lam**2 * np.eye(J.shape[1])) @ J.T
-
-    # Create trajectory in Cartesian space (interpolated positions)
-    s_profile = trapezoidal(0, 1, steps)
+                  
+    # Create trajectory in Cartesian space 
+    s_profile = trapezoidal(0, 1, steps)        # smooth velocity profile / trapezoidal
     s = s_profile.q
-    x = np.zeros((3, steps))
-    theta = np.zeros((3, steps))
+    x = np.zeros((3, steps))                # position trajectory
+    theta = np.zeros((3, steps))            # orientation trajectory
 
     R0     = SO3(T_start.R)             # start orientation as SO3
-    R1     = SO3(T_goal.R)               # target orientation   // SO3.Rx(np.pi)  
+    R1     = SO3(T_goal.R)               # target orientation  
 
     for i in range(steps):
         # Linear interpolation between start and goal
@@ -493,7 +489,7 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
         x[2, i] = (1 - s[i]) * T_start.t[2] + s[i] * T_goal.t[2]
 
         if z_arc == True:
-            x[2, i] += 0.3 * np.sin(np.pi * s[i])
+            x[2, i] += 0.3 * np.sin(np.pi * s[i])        #option for upward arc 
     
         # Keep gripper vertical
         #theta[:, i] = [np.pi, 0, 0]
@@ -505,7 +501,6 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
     qdot = np.zeros((steps, robot.n))
     m = np.zeros(steps)
     q_matrix[0, :] = robot.q.copy()
-    #qlim = np.array(robot.qlim).T
 
     # RMRC loop
     for i in range(steps - 1):
@@ -539,19 +534,19 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
         m[i] = np.sqrt(np.linalg.det(J @ J.T))
         if m[i] < epsilon:      #Check if we are near a singularity
             ratio = m[i] / epsilon          ## ranges from 0 (at singularity) to 1 (safe)
-            lam = (1 - ratio) * lambda_max  # damping value between 0 → lambda_max
+            lam = (1 - ratio) * lambda_max  # damping value between 0 and lambda_max
         else:
             lam = 0                 # If robot is not near singularity, no damping needed
-        invJ = damped_ls(J, lam)
+        invJ = np.linalg.inv(J.T @ J + lam**2 * np.eye(J.shape[1])) @ J.T       # damped least squares inverse
 
-        # --- Solve joint velocities
+        # Solve joint velocities
         qdot[i, :] = (invJ @ xdot).T
     
 
-        # --- Integrate joint motion ---
+        # Integrate joint motion 
         q_matrix[i + 1, :] = q_matrix[i, :] + delta_t * qdot[i, :]
 
-        # --- Update robot in Swift ---
+        # Update robot 
         robot.q = q_matrix[i + 1, :]
         robot2.gripper.attach_to_robot(robot2)
 
@@ -559,7 +554,7 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
             while is_estop(2):
                 time.sleep(0.05)
 
-        # --- For picking up objects ---
+        # option for picking up objects
         if follow_object and obj is not None:
             global trash_offset_ur3
             if obj_offset is True:
@@ -567,13 +562,11 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
             else:
                 obj.T = robot.fkine(robot.q) * SE3(0, 0, 0.06) * SE3.Rx(np.pi)
             
-
         if is_estop(2):
             while is_estop(2):
                 time.sleep(0.05)
 
         env.step(delta_t)
-
 
     return q_matrix[-1, :]
 
@@ -627,7 +620,6 @@ def ur3_pick_and_place():
                 time.sleep(0.05)
 
         while crusher_busy or is_estop(3):
-            print("🟡 UR3 waiting for IRB1200 to finish...")
             time.sleep(0.2)
 
         rmrc_move_ur3(robot2, env, T_pick, T_place, follow_object=True, obj=ur3_ball, obj_offset=True, z_arc=True)       # traj2
@@ -645,8 +637,7 @@ def ur3_pick_and_place():
 
         time.sleep(4.0)
 
-        while crusher_busy or is_estop(3):
-            print("🟡 UR3 waiting for IRB1200 to finish...")
+        while crusher_busy or is_estop(3):         # UR3 waiting for robot3/IRB1200 to finish before enter its space
             time.sleep(0.2)
 
         rmrc_move_ur3(robot2, env, T_rest, T_place)       # traj4
@@ -656,7 +647,6 @@ def ur3_pick_and_place():
             env.step(0.01)
 
         while crusher_busy or is_estop(3):
-            print("🟡 UR3 waiting for IRB1200 to finish...")
             time.sleep(0.2)
 
         rmrc_move_ur3(robot2, env, T_place, T_box, follow_object=True, obj=crushed, z_arc=True)        # traj5
@@ -669,7 +659,7 @@ def ur3_pick_and_place():
 
         rmrc_move_ur3(robot2, env, T_box, T_rest)         # traj6
 
-        area_trash.remove(ur3_ball)
+        area_trash.remove(ur3_ball)        # finish dealing with trash from ur3
 
 
 '''
@@ -1188,6 +1178,7 @@ while True:
 
     # --- ROBOT 1 MAIN LOOP ---
     robot1_main_cycle()
+
 
 
 
