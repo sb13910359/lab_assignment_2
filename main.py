@@ -493,7 +493,7 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
         x[2, i] = (1 - s[i]) * T_start.t[2] + s[i] * T_goal.t[2]
 
         if z_arc == True:
-            x[2, i] += 0.2 * np.sin(np.pi * s[i])
+            x[2, i] += 0.3 * np.sin(np.pi * s[i])
     
         # Keep gripper vertical
         #theta[:, i] = [np.pi, 0, 0]
@@ -1163,6 +1163,7 @@ while True:
 
     # --- ROBOT 1 MAIN LOOP ---
     robot1_main_cycle()
+
 
 
 
