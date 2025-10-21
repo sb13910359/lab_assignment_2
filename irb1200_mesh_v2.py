@@ -106,13 +106,13 @@ class IRB1200(DHRobot3D):
 
 #IRB1200 End effector
 class IRB1200EE:            
-    def __init__(self, cyl_radius=0.08, cyl_length=0.15,
-                 plate_size=0.18, plate_thickness=0.04,
+    def __init__(self, cyl_radius=0.04, cyl_length=0.10,
+                 plate_size=0.30, plate_thickness=0.11,
                  color_cyl=[0.96, 0.70, 0.82, 1],
                  color_plate=[0.3, 0.3, 0.3, 1]):
         # --- geometry parts ---
-        self.cyl = Cylinder(radius=cyl_radius, length=cyl_length, color=color_cyl)
-        self.plate = Cuboid(scale=(plate_size, plate_size, plate_thickness), color=color_plate)
+        self.cyl = Cylinder(radius=cyl_radius, length=(cyl_length), color=color_cyl)
+        self.plate = Cuboid(scale=(plate_size, (plate_size + 0.08), plate_thickness), color=color_plate)
 
         # --- stored params ---
         self.cyl_radius = cyl_radius
@@ -144,5 +144,6 @@ class IRB1200EE:
 
 
     
+
 
 
