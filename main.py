@@ -510,7 +510,7 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
     # RMRC loop
     for i in range(steps - 1):
 
-        if get_mode() != "auto" or not is_robot_active(3):   # (for robot3)
+        if get_mode() != "auto" or not is_robot_active(2):  
             print("🔴 UR3 paused (manual mode or inactive).")
             return
 
@@ -1030,6 +1030,7 @@ def set_estop(robot_id=None, value=True):
         state[f"r{robot_id}_estop"] = False    # sync GUI state
         state["e_stop"] = False
         sync_estop_label(robot_id, "clear")
+        set_mode("manual")
         print(f"✅ E-STOP CLEARED — Robot {robot_id} ready.")
  
 def get_mode():
@@ -1187,6 +1188,7 @@ while True:
 
     # --- ROBOT 1 MAIN LOOP ---
     robot1_main_cycle()
+
 
 
 
