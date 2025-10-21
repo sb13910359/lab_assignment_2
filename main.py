@@ -594,9 +594,20 @@ def ur3_pick_and_place():
     while len(area_trash) > 0:
 
         if is_estop(2):
-            print("⚠️ E-STOP")
             while is_estop(2):
                 time.sleep(0.3)
+
+        if get_mode() != "auto" or not is_robot_active(2):   
+            return
+        
+        q_current = robot2.q.copy()
+
+        rest_traj = rtb.jtraj(q_current, q_rest, 10).q      #reset to q_rest
+        for q in rest_traj:
+            robot2.q = q
+            robot2.gripper.attach_to_robot(robot2)  
+            env.step(0.02)
+            time.sleep(0.02)
             
 
         ur3_ball = area_trash[0]
@@ -726,9 +737,21 @@ def crusher_rmrc_trajectory():
         T_start, q0=np.array([0, np.pi/4, 0, 0, np.pi/4, 0])
     ).q
 
-    print("🦾 Starting crusher RMRC sequence...")
+    print("Starting crusher RMRC sequence...")
 
-    # --- RMRC Loop (downward motion) ---
+    q_current = robot3.q.copy()
+
+    q_rest = np.array([-5.734102970222921e-09, -0.12308620608416643, -0.002540056574218852,
+                     9.292429048457507e-10, 1.6964225904475079, -1.570796331431561])
+
+    rest_traj = rtb.jtraj(q_current, q_rest, 10).q      #reset to q_rest if moved around
+    for q in rest_traj:
+        robot3.q = q
+        robot3.ee.attach_to_robot(robot3)
+        env.step(0.02)
+        time.sleep(0.02)
+
+    # RMRC Loop (downward motion)
     for i in range(steps - 1):
         if is_estop(3):
             print("🚨 E-STOP active for IRB1200")
@@ -792,9 +815,8 @@ def crusher_rmrc_trajectory():
     except Exception as e:
         print(f"Error during crushing: {e}")
 
-    # -------------------------
+
     # Upward release motion
-    # -------------------------
     for q in q_matrix[::-1]:
         if is_estop(3):
             print("🚨 E-STOP active for IRB1200")
@@ -1000,11 +1022,13 @@ def set_estop(robot_id=None, value=True):
     if value:
         event.set()
         state[f"r{robot_id}_estop"] = True     # sync GUI state
+        state["e_stop"] = True
         sync_estop_label(robot_id, "active")
         print(f"🚨 E-STOP ON — Robot {robot_id} halted.")
     else:
         event.clear()
         state[f"r{robot_id}_estop"] = False    # sync GUI state
+        state["e_stop"] = False
         sync_estop_label(robot_id, "clear")
         print(f"✅ E-STOP CLEARED — Robot {robot_id} ready.")
  
@@ -1163,6 +1187,7 @@ while True:
 
     # --- ROBOT 1 MAIN LOOP ---
     robot1_main_cycle()
+
 
 
 
