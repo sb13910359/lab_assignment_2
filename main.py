@@ -66,7 +66,7 @@ def moving_wall_collision(human, baserobot, robot_id):
 
         hit = False
         for (p0, p1) in [(p0_x, p1_x), (p0_y, p1_y), (p0_d1, p1_d1), (p0_d2, p1_d2)]:
-            for plane in moving_planes.items():
+            for plane_name, plane in moving_planes.items():
                 n, P = plane["normal"], plane["point"]
                 intersect, check = line_plane_intersection(n, P, p0, p1)
                 if check == 1:
@@ -95,7 +95,7 @@ def check_collision(q, robot):
     for i in range(6):
         p0 = tr[i][:3, 3]
         p1 = tr[i+1][:3, 3]
-        for plane_name, plane in planes.values():
+        for plane in planes.values():
             n, P = plane["normal"], plane["point"]
             intersect, check = line_plane_intersection(n, P, p0, p1)
 
@@ -1181,6 +1181,7 @@ while True:
 
     # --- ROBOT 1 MAIN LOOP ---
     robot1_main_cycle()
+
 
 
 
