@@ -371,7 +371,7 @@ def base_step_with_walls(base_geom, step_size=0.05):
 
 
 #往基座走去
-def move_base_towards(base_geom, target_xy, step_size=0.05, max_iters=800):
+#def move_base_towards(base_geom, target_xy, step_size=0.05, max_iters=800):
     def _yaw_of(T):
         R = T[:3, :3]
         return np.arctan2(R[1, 0], R[0, 0])  # 算出目前robot在 XY 平面的朝向角度
@@ -535,7 +535,7 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
               follow_object=False, obj=None, obj_offset=None, z_arc=False):
                   
     # Create trajectory in Cartesian space 
-    s_profile = trapezoidal(0, 1, steps)        # smooth velocity profile / trapezoidal
+    s_profile = trapezoidal(0, 1, steps)        # trapezoidal
     s = s_profile.q
     x = np.zeros((3, steps))                # position trajectory
     theta = np.zeros((3, steps))            # orientation trajectory
@@ -598,7 +598,7 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
             lam = (1 - ratio) * lambda_max  # damping value between 0 and lambda_max
         else:
             lam = 0                 # If robot is not near singularity, no damping needed
-        invJ = np.linalg.inv(J.T @ J + lam**2 * np.eye(J.shape[1])) @ J.T       # damped least squares inverse
+        invJ = np.linalg.inv(J.T @ J + lam * np.eye(J.shape[1])) @ J.T       # damped least squares inverse
 
         # Solve joint velocities
         qdot[i, :] = (invJ @ xdot).T
@@ -840,7 +840,7 @@ def crusher_rmrc_trajectory():
             lam = 0
 
         # Damped Least Squares inverse
-        invJ = np.linalg.inv(J.T @ J + lam**2 * np.eye(J.shape[1])) @ J.T
+        invJ = np.linalg.inv(J.T @ J + lam * np.eye(J.shape[1])) @ J.T
 
         # Joint velocities and integration
         qdot[i, :] = (invJ @ xdot).T
