@@ -64,15 +64,15 @@ class IRB1200(DHRobot3D):
         Create robot's standard DH model
         """
         links = []
-        a = [0.0, 350e-3, 42e-3, 0.0, 0.0, 0.0]
-        d = [399e-3, 0.0, 0.0, 351e-3, 0.0, 82e-3]     
-        alpha = [-np.pi/2, 0.0, -np.pi/2, np.pi/2, -np.pi/2, 0]
+        a = [0.0, 350e-3, 42e-3, 0.0, 0.0, 0.0]                     # dh param source: Krishnan, M. G., & A. S. (2019, November).  
+        d = [399e-3, 0.0, 0.0, 351e-3, 0.0, 82e-3]                  #                  Forward and inverse kinematics of IRB 1200.
+        alpha = [-np.pi/2, 0.0, -np.pi/2, np.pi/2, -np.pi/2, 0]     # https://www.scribd.com/document/694247113/Paper-IEEE-Forward-and-inverse-kinematics-of-IRB1200-2
         offset = [ 0.0, -np.pi/2, 0.0, 0.0, 0.0, -np.pi ]
         d2r = np.pi / 180       # deg 2 rad helper
         qlim = [
             [-170 * d2r, 170 * d2r],
             [-100 * d2r, 80 * d2r],
-            [-150 * d2r, 70  * d2r],
+            [-150 * d2r, 70  * d2r],        
             [-270 * d2r, 270 * d2r],
             [-130 * d2r, 130 * d2r],
             [-360 * d2r, 360 * d2r]
@@ -84,25 +84,7 @@ class IRB1200(DHRobot3D):
         return links
     
 
-    # -----------------------------------------------------------------------------------#
-    def test(self):
-        """
-        Test the class by adding 3d objects into a new Swift window and do a simple movement
-        """
-        env = swift.Swift()
-        env.launch(realtime= True)
-        self.q = self._qtest
-        self.add_to_env(env)
 
-        q_goal = [self.q[i]-np.pi/3 for i in range(self.n)]
-        qtraj = rtb.jtraj(self.q, q_goal, 50).q
-
-        for q in qtraj:
-            self.q = q
-            env.step(0.02)
-
-        env.hold()
-        time.sleep(3)
 
 #IRB1200 End effector
 class IRB1200EE:            
@@ -110,11 +92,11 @@ class IRB1200EE:
                  plate_size=0.30, plate_thickness=0.11,
                  color_cyl=[0.96, 0.70, 0.82, 1],
                  color_plate=[0.3, 0.3, 0.3, 1]):
-        # --- geometry parts ---
+      
         self.cyl = Cylinder(radius=cyl_radius, length=(cyl_length), color=color_cyl)
         self.plate = Cuboid(scale=(plate_size, (plate_size + 0.08), plate_thickness), color=color_plate)
 
-        # --- stored params ---
+        
         self.cyl_radius = cyl_radius
         self.cyl_length = cyl_length
         self.plate_size = plate_size
@@ -135,7 +117,7 @@ class IRB1200EE:
         T = robot.fkine(robot.q)
         R_down = SE3.Rz(np.pi/2) * SE3.Rx(np.pi)
 
-        # Center the cylinder under the flange
+        # Center the cylinder 
         self.cyl.T = T * R_down * SE3(0, 0, -self.cyl_length / 2)
 
         # Attach the plate directly under the cylinder

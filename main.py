@@ -24,7 +24,7 @@ from robot_gui import RobotGUI
 from human import Human
 
 #import serial reader (for hardware e-stop)
-#import serial
+import serial
 
 
 '''
@@ -80,15 +80,14 @@ def moving_wall_collision(human, baserobot, robot_id):
             if hit:
                 break #不用繼續檢查下去直接break
         if not hit and is_estop(robot_id):
-            if state.get(f"r{robot_id}_estop_source") != "human click":
+            if state.get(f"r{robot_id}_estop_source") != "human click" and state.get(f"r{robot_id}_estop_source") != "arduino":
                 set_estop(robot_id, False)
 
         time.sleep(0.05)
 
 def check_collision(q, robot):
-    """
-    連桿碰撞檢測
-    """
+    
+    #連桿碰撞檢測
     
     tr = robot.fkine_all(q).A
     planes = {"floor": {"normal": [0, 0, 1], "point": [0, 0, 0],"location_x": [0, 10], "location_y": [0, 10]},
@@ -115,8 +114,7 @@ def check_collision(q, robot):
 '''
 #robot 1
 def robot1_main_cycle():
-    """
-    """
+
     #宣告會被此函式讀寫的全域變數 
     global target_pos_world, target_ball, holding, trash_offset_gen3, current_trash_index
   
@@ -569,11 +567,11 @@ def rmrc_move_ur3(robot, env, T_start, T_goal,
     for i in range(steps - 1):
 
         if get_mode() != "auto" or not is_robot_active(2):  
-            print("🔴 UR3 paused (manual mode or inactive).")
+            print("UR3 paused (manual mode or inactive).")
             return
 
         if is_estop(2):
-            print("🚨 E-STOP: UR3")
+            print("E-STOP: UR3")
             return q_matrix[i, :]
 
         # Forward kinematics
@@ -643,9 +641,9 @@ def ur3_pick_and_place():
     q_box   = robot2.ikine_LM(area_box.T * SE3.Tz(0.1) * SE3.Rx(np.pi),   q0=np.array([-7*np.pi/8, -2*np.pi + 0.15, -np.pi/4, -np.pi/4, np.pi/2, 0])).q
 
     T_rest  = robot2.fkine(q_rest)
-    T_pick  = robot2.fkine(q_pick) * SE3(0, 0, -0.06)
-    T_place = robot2.fkine(q_place) * SE3(0, 0, -0.1)
-    T_box   = robot2.fkine(q_box)
+    T_pick  = robot2.fkine(q_pick) * SE3(0, 0, -0.06)   # from robot1
+    T_place = robot2.fkine(q_place) * SE3(0, 0, -0.1)   # to robot3
+    T_box   = robot2.fkine(q_box)                       # end zone
 
     while len(area_trash) > 0:
 
@@ -733,12 +731,12 @@ def ur3_pick_and_place():
 
 #robot 3
 def swap_to_crushed_object():
-    """
-    Swaps the current UR3 object with its corresponding crushed version.
-    """
+    
+    #Swaps the current UR3 object with its corresponding crushed version.
+    
     global crushed, current_ur3_object, current_trash_index, squashed_trash_list
 
-    # Safety check: nothing to crush yet
+    # if triggered before ready
     if current_ur3_object is None or current_trash_index is None:
         print("No current UR3 object to crush.")
         return None
@@ -750,14 +748,14 @@ def swap_to_crushed_object():
     crushed = squashed_trash_list[current_trash_index]
     crushed.T = area_place.T * SE3.Tz(0.01)
     env.step()
-    print(f"🟣 Crushed object #{current_trash_index} swapped in.")
+    print(f"Crushed object #{current_trash_index} swapped in.")
     return crushed   # return the reference
 
 # robot3
 def crusher_rmrc_trajectory():
 
     if get_mode() != "auto" or not is_robot_active(3):   # (for robot3)
-        print("🔴 IRB1200 paused (manual mode or inactive).")
+        print("IRB1200 paused (manual mode or inactive).")
         return
     
     q_current = robot3.q.copy()
@@ -809,10 +807,10 @@ def crusher_rmrc_trajectory():
     # RMRC Loop (downward motion)
     for i in range(steps - 1):
         if is_estop(3):
-            print("🚨 E-STOP active for IRB1200")
+            print("E-STOP active for IRB1200")
             while is_estop(3):
                 time.sleep(0.1)  # wait until cleared
-            print("🟢 E-STOP cleared for IRB1200")
+            print("E-STOP cleared for IRB1200")
 
         # Forward kinematics
         T_now = robot3.fkine(q_matrix[i, :]).A
@@ -835,7 +833,7 @@ def crusher_rmrc_trajectory():
         m[i] = np.sqrt(np.linalg.det(J @ J.T))
 
         # Adaptive damping
-        if m[i] < epsilon:
+        if m[i] < epsilon:                  
             ratio = m[i] / epsilon
             lam = (1 - ratio) * lambda_max
         else:
@@ -859,10 +857,10 @@ def crusher_rmrc_trajectory():
     # Try to swap object after crush
     try:
         if is_estop(3):
-            print("🚨 E-STOP active for IRB1200")
+            print("E-STOP active for IRB1200")
             while is_estop(3):
                 time.sleep(0.1)  # wait until cleared
-            print("🟢 E-STOP cleared for IRB1200")
+            print("E-STOP cleared for IRB1200")
         
         global crushed
         crushed = swap_to_crushed_object()
@@ -874,20 +872,22 @@ def crusher_rmrc_trajectory():
     # Upward release motion
     for q in q_matrix[::-1]:
         if is_estop(3):
-            print("🚨 E-STOP active for IRB1200")
+            print("E-STOP active for IRB1200")
             while is_estop(3):
                 time.sleep(0.1)  # wait until cleared
-            print("🟢 E-STOP cleared for IRB1200")
+            print("E-STOP cleared for IRB1200")
         robot3.q = q
         robot3.ee.attach_to_robot(robot3)
         env.step(delta_t)
         time.sleep(delta_t)
 
-    print("✅ Crusher RMRC sequence complete!")
+    print("Crusher RMRC sequence complete!")
 
 '''
 ------------------------- INITIALISE 始化環境 -------------------------
 '''
+
+# env init
 
 env_builder = EnvironmentBuilder()
 env = env_builder.env
@@ -917,18 +917,12 @@ robot3.base = robot3.base * area_place.T * SE3.Ty(-0.37) * SE3.Rz(np.pi/2)
 robot3_base = Cylinder(radius=0.25, length=0.6,
                        color=(0.20, 0.12, 0.06),
                        pose=robot3.base * SE3(0, 0, -0.31)) 
-alarm_safe = Cylinder(radius=0.25, length=0.6,
-                       color=(0,0.9, 0.06),
-                       pose=SE3(2, 2,- 1)* SE3.Rx(np.pi/2) )
-alarm_danger = Cylinder(radius=0.25, length=0.6,
-                       color=(1, 0.02, 0.01),
-                       pose=SE3(2, 2, -1)* SE3.Rx(np.pi/2) )
+
 
 env.add(base_geom)
 env.add(robot2_base)
 env.add(robot3_base)
-env.add(alarm_safe)
-env.add(alarm_danger)
+
 
 first_q = robot1.q.copy()
 robot2.q = np.array([np.pi/4 - 0.15, -np.pi/2 + 0.15, - 0.3, -np.pi/2 - 0.15, np.pi/2, 0])
@@ -1009,6 +1003,19 @@ balls, area_trash, squashed_trash_list = spawn_random_trash(env)
 human_obj = Human(env, obj_dir)
 
 
+#add estop visual alarm
+alarm_safe = Cylinder(radius=0.4, length=0.1,
+                       color=(0,0.9, 0.06),
+                       pose=SE3(5.0, 0.3, 3)*SE3.Rx(np.pi/2) )
+alarm_danger = Cylinder(radius=0.4, length=0.1,
+                       color=(1, 0.02, 0.01),
+                       pose=SE3(5.0, 0.3, -3)*SE3.Rx(np.pi/2) )
+
+env.add(alarm_safe)
+env.add(alarm_danger)
+
+
+
 '''
 ------------------------- STATES, E-STOP AND GUI -------------------------
 '''
@@ -1025,6 +1032,7 @@ state = {
     "target_pos_world": None,
     "target_ball": None,
     "e_stop": False,
+    
     # E-STOP 來源 (manual / collision / None)
     "r1_estop_source": None,
     "r2_estop_source": None,
@@ -1099,8 +1107,8 @@ def set_estop(robot_id=None, value=True):
         event.set()# robot 停止（用 threading.Event 封鎖 robot 的動作 thread）
         state[f"r{robot_id}_estop"] = True     # sync GUI state
         state["e_stop"] = True
-        alarm_safe.T = SE3(4, 4, -1)
-        alarm_danger.T = SE3(4, 4, 1)
+        alarm_safe.T = SE3(5.0, 0.3, -3)*SE3.Rx(np.pi/2)
+        alarm_danger.T = SE3(5.0, 0.3, 3)*SE3.Rx(np.pi/2)
         sync_estop_label(robot_id, "active")#更新 GUI 按鈕文字
         print(f" E-STOP ON — Robot {robot_id} halted.")
 
@@ -1110,8 +1118,8 @@ def set_estop(robot_id=None, value=True):
         state[f"r{robot_id}_estop"] = False    # sync GUI state
         state["e_stop"] = False
         sync_estop_label(robot_id, "clear")
-        alarm_safe.T = SE3(4, 4, 1)
-        alarm_danger.T = SE3(4, 4, -1)
+        alarm_safe.T = SE3(5.0, 0.3, 3)*SE3.Rx(np.pi/2)
+        alarm_danger.T = SE3(5.0, 0.3, -3)*SE3.Rx(np.pi/2)
         #set_mode("manual")
         print(f" E-STOP CLEARED — Robot {robot_id} ready.")
 
@@ -1121,11 +1129,11 @@ def get_mode():
 
 #設定mode 是auto 或manual
 def set_mode(value: str):
-    """Change robot mode and keep GUI in sync."""
+    #Change robot mode and keep GUI in sync.
     state["mode"] = value
 #寫入 state
 def activate_robot(robot_id, active=True):
-    """Activate or deactivate robot based on current mode."""
+    #Activate or deactivate robot based on current mode.
     if robot_id == 2:
         #把state["r2_active"]設成active
         state["r2_active"] = active
@@ -1134,7 +1142,7 @@ def activate_robot(robot_id, active=True):
 
 #讀取state
 def is_robot_active(robot_id):
-    """Return whether a robot is currently active."""
+    #Return whether a robot is currently active. (for robots 2 3)
     if robot_id == 2:
         return state.get("r2_active", False)
     elif robot_id == 3:
@@ -1142,14 +1150,14 @@ def is_robot_active(robot_id):
     return False
 
 def keep_swift_alive(env):
-    """Ensures Swift keeps rendering even during E-STOPs."""
+    #Ensures Swift keeps rendering even during e-stop, etc
     while True:
         env.step(0.05)
         time.sleep(0.05)
 
 #更新按鈕上面的文字 
 def sync_estop_label(robot_id, state_label="active"):
-    """Update GUI E-STOP button label & colour when triggered externally."""
+    #Update GUI E-STOP button label & colour when triggered externally.
     #建一個 對照表 (dictionary)
     btn_map = {1: gui.estop_btn_r1, 2: gui.estop_btn_r2, 3: gui.estop_btn_r3}
     if robot_id not in btn_map:
@@ -1173,18 +1181,18 @@ def crusher_watcher():
         if crusher_trigger and not crusher_busy:
             crusher_trigger = False
             crusher_busy = True
-            print("🟢 Crusher thread starting...")
+            print("Crusher thread starting...")
 
             def run_crusher():
                 try:
                     # Pass both the object and environment safely
                     crusher_rmrc_trajectory()
                 except Exception as e:
-                    print(f"⚠️ Crusher error: {e}")
+                    print(f"Crusher error: {e}")
                 finally:
                     global crusher_busy
                     crusher_busy = False
-                    print("✅ Crusher finished, ready for next trigger")
+                    print("Crusher finished, ready for next trigger")
 
             threading.Thread(target=run_crusher, daemon=True).start()
 
@@ -1203,24 +1211,26 @@ def hardware_estop_listener():
 
                 if line.startswith("ESTOP_R"):
                     rid = int(line[-1])             #check which button is pressed
-                    print(f"🚨 Hardware E-STOP pressed: Robot {rid}")
+                    print(f"Hardware E-STOP pressed: Robot {rid}")
                     set_estop(rid, True)
+                    state[f"r{rid}_estop_source"] = "arduino"
                     sync_estop_label(rid, "active")
 
                 elif line.startswith("CONFIRM_R"):  #confirm?
                     rid = int(line[-1])             
-                    print(f"⚪ Confirm release requested: Robot {rid}")
+                    print(f"Confirm release requested: Robot {rid}")
                     sync_estop_label(rid, "confirm")
 
                 elif line.startswith("CLEAR_R"):       #clear estop
                     rid = int(line[-1])
-                    print(f"✅ Hardware E-STOP cleared: Robot {rid}")
+                    print(f"Hardware E-STOP cleared: Robot {rid}")
+                    state[f"r{rid}_estop_source"] = None
                     set_estop(rid, False)
                     sync_estop_label(rid, "clear")
                 
 
             except Exception as e:
-                print("⚠️ Arduino read error:", e)
+                print("Arduino read error:", e)
         time.sleep(0.05)
 
 
@@ -1237,7 +1247,7 @@ threading.Thread(target=moving_wall_collision, args=(human_obj.human,base_geom, 
 threading.Thread(target=moving_wall_collision, args=(human_obj.human,robot3_base, 3), daemon=True).start()
 threading.Thread(target=moving_wall_collision, args=(human_obj.human,robot2_base, 2), daemon=True).start()
 threading.Thread(target=keep_swift_alive, args=(env,), daemon=True).start()
-#threading.Thread(target=hardware_estop_listener, daemon=True).start()
+threading.Thread(target=hardware_estop_listener, daemon=True).start()
 
 
 '''
